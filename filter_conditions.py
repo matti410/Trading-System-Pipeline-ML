@@ -178,23 +178,25 @@ def filter_low_volatility(df: pd.DataFrame, window: int = 500,
 
 
 def filter_mid_volatility(df: pd.DataFrame, window: int = 500,
-                          percentile: float = 0.75) -> pd.Series:
+                          low_percentile: float = 0.35,
+                          high_percentile: float = 0.75) -> pd.Series:
     """
-    Volatilita' MEDIA
+    Volatilita' MEDIA: ATR fra il percentile basso e quello alto della
+    propria finestra rolling.
 
-    Una soglia fissa in unita' di prezzo non e' trasferibile: il valore
-    giusto per EURUSD non lo e' per XAUUSD, e non lo e' nemmeno per EURUSD
-    fra due regimi di volatilita' diversi. Si usa il percentile rolling
-    dell'ATR sulla propria storia recente, cosi' il filtro si auto-adatta
-    a strumento, timeframe e regime - stessa scelta fatta in
-    F14_LOW_DRIFT_REGIME per lo stesso motivo.
+    CORREZIONE 28/9/2026. La versione precedente era `atr <= p75`, cioe'
+    includeva anche tutta la volatilita' bassa: coincideva con il contrario
+    di F2_HIGH e conteneva F2_LOW. Ora la fascia e' (p35, p75], con i
+    default allineati a F2_LOW (0.35) e F2_HIGH (0.75), cosi' i tre filtri
+    LOW / MID / HIGH si spartiscono le barre senza sovrapporsi.
 
-    window=500 su M15 sono circa 5 giorni di contrattazione.
-    percentile=0.5 seleziona la meta' piu' volatile; alza a 0.7 per essere
-    piu' severo.
+    Stesso percentile rolling di F2_LOW/F2_HIGH: si auto-adatta a
+    strumento, timeframe e regime. window=500 su M15 ~ 5 giorni.
     """
-    soglia = df["atr"].rolling(int(window)).quantile(percentile)
-    return df["atr"] <= soglia
+    atr_q = df["atr"].rolling(int(window))
+    soglia_bassa = atr_q.quantile(low_percentile)
+    soglia_alta = atr_q.quantile(high_percentile)
+    return (df["atr"] > soglia_bassa) & (df["atr"] <= soglia_alta)
 
 
 def filter_high_volatility(df: pd.DataFrame, window: int = 500,

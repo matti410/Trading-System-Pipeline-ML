@@ -53,7 +53,10 @@ def costruisci_target(df_lato, colonne_trigger, direction, horizon=25, soglia_co
     entry_price = open_arr[entry_pos[valido]]
     exit_price = close_arr[exit_pos[valido]]
 
-    gain = (exit_price - entry_price) * direction
+    # rendimento RELATIVO (come nell'event study), non differenza di prezzo:
+    # la soglia costi e' in frazione (0.65e-4 = 0.65 bp) e deve valere per
+    # qualunque symbol, anche con prezzi da decine di migliaia (BTCUSD).
+    gain = (exit_price / entry_price - 1.0) * direction
     target = (gain > soglia_costi).astype(int)
 
     return pd.Series(target, index=trigger_idx[valido], name='TARGET')
