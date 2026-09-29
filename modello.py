@@ -65,14 +65,22 @@ def _controlla_split(idx_train, idx_test):
                          "usa gli indici di split_train_test")
 
 
-def addestra(X, y, idx_train, idx_test, parametri=None):
+def addestra(X, y, idx_train, idx_test, parametri=None, pesi=None):
     """
     Addestra LightGBM SOLO sulle righe idx_train. idx_test serve solo al
     controllo: se il train non viene tutto prima del test, si ferma.
+
+    pesi : None (default, modello di base) oppure Series da
+           pesi.pesi_unicita(idx_train, ...), indicizzata su idx_train.
     """
     _controlla_split(idx_train, idx_test)
+    sw = None
+    if pesi is not None:
+        if not pesi.index.equals(idx_train):
+            raise ValueError("i pesi devono essere calcolati su idx_train (stesso indice)")
+        sw = pesi.to_numpy()
     modello = LGBMClassifier(**(parametri or PARAMETRI_BASE))
-    modello.fit(X.loc[idx_train], y.loc[idx_train])
+    modello.fit(X.loc[idx_train], y.loc[idx_train], sample_weight=sw)
     return modello
 
 
