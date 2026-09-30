@@ -47,7 +47,8 @@ def rendimenti_trigger(df_lato, indice, direction, horizon=25):
     Guadagno (frazione, nel verso del trade) di ogni trigger in `indice`:
     ingresso Open della barra successiva, uscita Close a `horizon` barre
     dal trigger. Stessa formula di target.costruisci_target, cosi'
-    (rend > soglia_costi) riproduce esattamente il target.
+    (rend > costo_pips * pip_size / prezzo_ingresso) riproduce il target,
+    salvo i pareggi esatti (guadagno = costo), che il target conta come 0.
     """
     pos = df_lato.index.get_indexer(indice)
     if (pos < 0).any() or (pos + horizon >= len(df_lato)).any():

@@ -7,8 +7,8 @@ Modulo ADDITIVO (29/9/2026): non modifica nessun file esistente.
       -> trigger OOS con probabilita' nella fascia operativa (soglia dal test)
   un_trade_alla_volta(idx, df_periodo, horizon=25)
       -> (trigger tenuti, n. saltati)
-  esegui_backtest(df_periodo, trigger_long, trigger_short, horizon=25,
-                  unita=100_000, capitale=150_000, costo_rt=0.65e-4)
+  esegui_backtest(df_periodo, trigger_long, trigger_short, horizon=25, *,
+                  unita, capitale, costo_pips, pip_size)
       -> dict con i portafogli LONG, SHORT, COMBINATO e i trigger saltati
   tabella_metriche({"nome": risultato, ...}) -> DataFrame
   grafico_equity({"nome": risultato, ...}, capitale)
@@ -18,10 +18,12 @@ REGOLE (decisioni del 29/9) - le stesse del target:
   - uscita al Close a `horizon` barre dal trigger, niente SL/TP
   - un trade alla volta PER LATO: un trigger che scatta mentre un trade
     dello stesso lato e' aperto viene saltato (e contato)
-  - lotto fisso (`unita` del symbol base), nessun reinvestimento:
-    il money management e' uno step successivo
-  - costo: `costo_rt` in frazione del controvalore, meta' in ingresso e
-    meta' in uscita (0.65 bp = commissione IC Markets EU Raw Spread)
+  - lotto fisso (`unita` = COSTI["lotto"], 1 lotto del symbol), nessun
+    reinvestimento: il money management e' uno step successivo
+  - costo (dal 29/9, conto Standard): importo FISSO per trade, in valuta di
+    quotazione = costo_pips * pip_size * unita, meta' in ingresso e meta' in
+    uscita (EURUSD, 1 lotto, 0.8 pips -> 8 USD a trade). Valori da
+    costi_symbol.costi(symbol).
 
 VectorBT open-source NON gestisce il margine: `capitale` deve coprire il
 controvalore della posizione. Se non basta, il backtest si ferma con un
@@ -78,28 +80,29 @@ def _ordini(df_periodo, trigger, direction, horizon, unita):
     return size, prezzo
 
 
-def _portafoglio(df_periodo, size, prezzo, capitale, costo_rt, raggruppa=False):
+def _portafoglio(df_periodo, size, prezzo, capitale, costo_ordine, raggruppa=False):
     return vbt.Portfolio.from_orders(
         close=df_periodo["Close"] if size.ndim == 1 else
         pd.concat([df_periodo["Close"]] * size.shape[1], axis=1, keys=["LONG", "SHORT"]),
         size=size, price=prezzo, size_type="amount", direction="both",
-        fees=costo_rt / 2, init_cash=capitale,
+        fixed_fees=costo_ordine, init_cash=capitale,
         cash_sharing=raggruppa, group_by=True if raggruppa else None,
         allow_partial=False, raise_reject=True, freq="15min",
     )
 
 
-def esegui_backtest(df_periodo, trigger_long, trigger_short, horizon=25,
-                    unita=100_000, capitale=150_000, costo_rt=0.65e-4):
+def esegui_backtest(df_periodo, trigger_long, trigger_short, horizon=25, *,
+                    unita, capitale, costo_pips, pip_size):
+    costo_ordine = costo_pips * pip_size * unita / 2   # meta' in ingresso, meta' in uscita
     tl, saltati_l = un_trade_alla_volta(trigger_long, df_periodo, horizon)
     ts, saltati_s = un_trade_alla_volta(trigger_short, df_periodo, horizon)
     sl, pl = _ordini(df_periodo, tl, 1, horizon, unita)
     ss, ps = _ordini(df_periodo, ts, -1, horizon, unita)
     return {
-        "LONG": _portafoglio(df_periodo, sl, pl, capitale, costo_rt),
-        "SHORT": _portafoglio(df_periodo, ss, ps, capitale, costo_rt),
+        "LONG": _portafoglio(df_periodo, sl, pl, capitale, costo_ordine),
+        "SHORT": _portafoglio(df_periodo, ss, ps, capitale, costo_ordine),
         "COMBINATO": _portafoglio(df_periodo, np.column_stack([sl, ss]),
-                                  np.column_stack([pl, ps]), capitale, costo_rt,
+                                  np.column_stack([pl, ps]), capitale, costo_ordine,
                                   raggruppa=True),
         "saltati": {"LONG": saltati_l, "SHORT": saltati_s,
                     "COMBINATO": saltati_l + saltati_s},
@@ -151,7 +154,7 @@ def grafico_equity(risultati, capitale):
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
         ax.legend(loc="upper left", frameon=False)
-    fig.suptitle("Equity OOS — lotto fisso, commissioni incluse, PnL nella valuta di quotazione (USD su EURUSD)", x=0.01, ha="left")
+    fig.suptitle("Equity OOS — lotto fisso, costi inclusi, PnL nella valuta di quotazione (USD su EURUSD)", x=0.01, ha="left")
     fig.tight_layout()
     plt.show()
     return fig
