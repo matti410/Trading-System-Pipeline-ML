@@ -36,8 +36,8 @@ RIBASSISTA, cioe' un filtro -1 su un ingresso long.
 
 Quindi `direction` e' un DEFAULT ragionevole, non una regola. Su entry di
 inversione va usato l'insieme completo dei filtri e lasciato decidere ai
-dati — che era la scelta originale documentata in F8/F9 e che resta
-valida.
+dati — che era la scelta originale documentata sul filtro di contesto
+di trend (oggi F7_UPTREND_CONTEXT) e che resta valida.
 
 Nota per questo percorso (V4, 18/9): la pipeline Trend Following usa
 `direction` cosi' com'e' (filtro e entry stessa direzione = conferma). La
@@ -47,12 +47,12 @@ opposto all'entry) — vedi `ROADMAP_RICERCA.md`, Passo 5.
 
 COPPIE DI FILTRI (`pair`) — AGGIUNTA 18/9/2026
 ------------------------------------------------
-Un filtro come F12_EXTENDED_UP/F13_EXTENDED_DOWN e' una singola idea
-("il prezzo e' esteso rispetto alla media") che ha due facce, una per
-direzione. Testarli come due righe indipendenti nella grid search (F12 sul
-solo long, F13 sul solo short, ciascuna a se') e' due esperimenti diversi
-("l'estensione aiuta il long da sola?", "aiuta lo short da sola?"), non lo
-stesso esperimento di un sistema che richiede l'estensione coerente su
+Un filtro come F8_TREND_CONVICTION_UP/F9_TREND_CONVICTION_DOWN e' una
+singola idea ("c'e' una deriva di fondo") che ha due facce, una per
+direzione. Testarli come due righe indipendenti nella grid search (F8 sul
+solo long, F9 sul solo short, ciascuna a se') e' due esperimenti diversi
+("la deriva aiuta il long da sola?", "aiuta lo short da sola?"), non lo
+stesso esperimento di un sistema che richiede la deriva coerente su
 entrambe le gambe. Per questo le coppie dichiarate qui sotto vengono
 raccolte in un'UNICA riga dalla grid search (vedi
 `engine.filter_search_bt`): il membro +1 va sul lato long, il -1 sul lato
@@ -96,7 +96,7 @@ il lato assente.
 
 PROVENIENZA E SCARTI
 --------------------
-I filtri da F10 in poi derivano dai "101 Formulaic Alphas" (Kakushadze,
+I filtri F5, F6 e da F8 in poi derivano dai "101 Formulaic Alphas" (Kakushadze,
 WorldQuant, 2015 - arXiv:1601.00991). Vivevano in un file separato per
 provenienza; sono stati uniti qui perche' dividere per provenienza e' un
 criterio debole: si cercano "i filtri di trend", non "i filtri Alpha101".
@@ -123,7 +123,7 @@ A30 - parte volume
     che su BTCUSD CFD e' il numero di variazioni di prezzo registrate dal
     feed del singolo broker, non il volume scambiato. La parte sulla
     coerenza delle ultime variazioni e' invece pulita e sopravvive da
-    sola, qui sotto, come F15_SHORT_TERM_CONSISTENCY.
+    sola, qui sotto, come F6_SHORT_TERM_CONSISTENCY.
 
 Sono state eliminate anche tutte le entry e le bidirezionali Alpha101:
 rank cross-sezionale non trasferibile su asset singolo, tick volume del
@@ -131,14 +131,16 @@ broker inaffidabile, segno fisso che e' una magnitudine e non una
 direzione.
 
 
-NOTA SUL VWAP (riguarda F16/F17)
+
+RIORDINO DEL 1/10/2026 (ramo ML)
 --------------------------------
-Su un asset H24 l'ancoraggio giornaliero del VWAP e' una convenzione, non
-un fatto. Mezzanotte UTC e' lo standard piu' diffuso su cripto, ma se il
-feed IC Markets e' su fuso broker (tipicamente UTC+2/+3) il reset cade a
-meta' sessione asiatica e il filtro si sposta in modo non banale.
-Verificare su quale ora ancora `engine.vwap_ops.vwap_anchored_daily`
-prima di dare peso ai risultati di questi due filtri.
+Eliminati perche' duplicavano un altro filtro (misurato su EURUSD M15 con
+diagnostica.sovrapposizioni): MID_VOLATILITY (determinato da LOW e HIGH),
+DOWNTREND_CONTEXT (contrario esatto di UPTREND), PRICE_ABOVE/BELOW_VWAP
+(contrari esatti fra loro, e coincidenti con UPTREND nell'86% delle barre),
+VOLUME_ABOVE_AVG_50 e VOLUME_CLIMAX (stessa idea di VOLUME_ABOVE_AVG),
+EXTENDED_DOWN e HIGH_NEAR_RANGE_TOP (sovrapposti a LOW_NEAR_RANGE_BOTTOM e
+EXTENDED_UP). Numerazione ricompattata senza buchi.
 """
 import numpy as np
 import pandas as pd
@@ -167,7 +169,7 @@ def filter_low_volatility(df: pd.DataFrame, window: int = 500,
     fra due regimi di volatilita' diversi. Si usa il percentile rolling
     dell'ATR sulla propria storia recente, cosi' il filtro si auto-adatta
     a strumento, timeframe e regime - stessa scelta fatta in
-    F14_LOW_DRIFT_REGIME per lo stesso motivo.
+    F5_LOW_DRIFT_REGIME per lo stesso motivo.
 
     window=500 su M15 sono circa 5 giorni di contrattazione.
     percentile=0.5 seleziona la meta' piu' volatile; alza a 0.7 per essere
@@ -175,28 +177,6 @@ def filter_low_volatility(df: pd.DataFrame, window: int = 500,
     """
     soglia = df["atr"].rolling(int(window)).quantile(percentile)
     return df["atr"] <= soglia
-
-
-def filter_mid_volatility(df: pd.DataFrame, window: int = 500,
-                          low_percentile: float = 0.35,
-                          high_percentile: float = 0.75) -> pd.Series:
-    """
-    Volatilita' MEDIA: ATR fra il percentile basso e quello alto della
-    propria finestra rolling.
-
-    CORREZIONE 28/9/2026. La versione precedente era `atr <= p75`, cioe'
-    includeva anche tutta la volatilita' bassa: coincideva con il contrario
-    di F2_HIGH e conteneva F2_LOW. Ora la fascia e' (p35, p75], con i
-    default allineati a F2_LOW (0.35) e F2_HIGH (0.75), cosi' i tre filtri
-    LOW / MID / HIGH si spartiscono le barre senza sovrapporsi.
-
-    Stesso percentile rolling di F2_LOW/F2_HIGH: si auto-adatta a
-    strumento, timeframe e regime. window=500 su M15 ~ 5 giorni.
-    """
-    atr_q = df["atr"].rolling(int(window))
-    soglia_bassa = atr_q.quantile(low_percentile)
-    soglia_alta = atr_q.quantile(high_percentile)
-    return (df["atr"] > soglia_bassa) & (df["atr"] <= soglia_alta)
 
 
 def filter_high_volatility(df: pd.DataFrame, window: int = 500,
@@ -209,7 +189,7 @@ def filter_high_volatility(df: pd.DataFrame, window: int = 500,
     fra due regimi di volatilita' diversi. Si usa il percentile rolling
     dell'ATR sulla propria storia recente, cosi' il filtro si auto-adatta
     a strumento, timeframe e regime - stessa scelta fatta in
-    F14_LOW_DRIFT_REGIME per lo stesso motivo.
+    F5_LOW_DRIFT_REGIME per lo stesso motivo.
 
     window=500 su M15 sono circa 5 giorni di contrattazione.
     percentile=0.5 seleziona la meta' piu' volatile; alza a 0.7 per essere
@@ -236,28 +216,6 @@ def filter_tall_candle(df: pd.DataFrame, window: int = 20,
     candle_range = df["High"] - df["Low"]
     avg_range = candle_range.rolling(window).mean()
     return candle_range > avg_range * multiplier
-
-
-def filter_volume_above_avg_50(df: pd.DataFrame, window: int = 50) -> pd.Series:
-    """
-    Stessa logica di F3, finestra 50 invece di 20 -> l'ipotesi originale
-    di volume "sopra media" con orizzonte piu' lungo, tenuta come
-    variante a parita' di logica.
-    """
-    return df["Volume"] > df["Volume"].rolling(window).mean()
-
-
-def filter_volume_climax(df: pd.DataFrame, window: int = 50,
-                         quantile: float = 0.9) -> pd.Series:
-    """
-    Volume sopra il `quantile`-esimo percentile della propria finestra
-    recente (default 90), non semplicemente sopra la media come F3/F6.
-    Copre l'ipotesi diversa di "climax/esaurimento" (tipica dei pattern
-    di reversal), distinta da "partecipazione sostenuta sopra media"
-    (piu' adatta ai pattern di continuation).
-    """
-    threshold = df["Volume"].rolling(window).quantile(quantile)
-    return df["Volume"] > threshold
 
 
 def filter_low_drift_regime(
@@ -329,7 +287,7 @@ def filter_short_term_consistency(
 
 
 # ======================================================================
-# Direzionali - a coppie speculari
+# Direzionali
 # ======================================================================
 
 def filter_uptrend_context(df: pd.DataFrame) -> pd.Series:
@@ -347,11 +305,6 @@ def filter_uptrend_context(df: pd.DataFrame) -> pd.Series:
     inversione vanno provati tutti i filtri, non solo quelli concordi.
     """
     return df["Close"] > df["ema50"]
-
-
-def filter_downtrend_context(df: pd.DataFrame) -> pd.Series:
-    """Speculare di F8: prezzo sotto l'EMA50 -> trend ribassista in corso."""
-    return df["Close"] < df["ema50"]
 
 
 def filter_trend_conviction_up(
@@ -374,14 +327,14 @@ def filter_trend_conviction_up(
     grandezza con segno, non una magnitudine. Stare nel percentile alto
     significa "il cumulato e' vicino al suo massimo recente", cioe'
     deriva rialzista. Il filtro e' quindi direzionale long, ed e' ora
-    dichiarato tale. F11 e' lo speculare che mancava.
+    dichiarato tale. F9 e' lo speculare che mancava.
 
     DUE FINESTRE DISTINTE, e vanno tenute distinte:
       lookback     su quante barre si somma il rendimento (350)
       rank_window  su quante barre si calcola il PERCENTILE (500)
 
     `rank_window` era 20, cioe' un percentile stimato su venti
-    osservazioni. Allineato a 500 come in F14, che fa la stessa
+    osservazioni. Allineato a 500 come in F5, che fa la stessa
     operazione. Alzare `lookback` tenendo `rank_window` corta peggiora le
     cose: un cumulato a 350 barre si muove lentamente, su 20 barre cambia
     pochissimo, e il percentile finirebbe per misurare il contributo
@@ -400,12 +353,12 @@ def filter_trend_conviction_down(
     threshold: float = 0.7,
 ) -> pd.Series:
     """
-    Speculare di F10: il rendimento cumulato e' nel percentile BASSO della
+    Speculare di F8: il rendimento cumulato e' nel percentile BASSO della
     propria storia recente - deriva ribassista di fondo.
 
     La soglia si specchia (`< 1 - threshold`) invece di essere un secondo
     numero indipendente, cosi' i due filtri restano simmetrici per
-    costruzione: con threshold=0.7 F10 prende il 30% piu' alto e F11 il
+    costruzione: con threshold=0.7 F8 prende il 30% piu' alto e F9 il
     30% piu' basso. Cambiando un solo parametro si muovono entrambi,
     ed e' impossibile tararli di fino uno contro l'altro per sbaglio.
     """
@@ -433,8 +386,8 @@ def filter_extended_up(
     gruppi che si contraddicono, col risultato medio vicino a niente
     qualunque sia il merito delle due meta'.
 
-    Il resto della base di codice questo problema lo aveva gia' risolto:
-    F18/F19 sono la stessa idea gia' divisa in due.
+    Lo speculare (estensione al ribasso) e' stato eliminato il 1/10/2026:
+    nel ramo ML resta solo il lato rialzista.
 
     True quando la media corta e' uscita SOPRA la banda
     SMA(long) + stddev(long). Normalizzato sulla deviazione standard,
@@ -447,70 +400,6 @@ def filter_extended_up(
     std_long = df["Close"].rolling(int(long_window)).std()
     sma_short = df["Close"].rolling(int(short_window)).mean()
     return sma_short > (sma_long + std_long)
-
-
-def filter_extended_down(
-    df: pd.DataFrame,
-    long_window: float = 8,
-    short_window: float = 2,
-) -> pd.Series:
-    """
-    Speculare di F12: la media corta e' scesa SOTTO la banda
-    SMA(long) - stddev(long).
-    """
-    sma_long = df["Close"].rolling(int(long_window)).mean()
-    std_long = df["Close"].rolling(int(long_window)).std()
-    sma_short = df["Close"].rolling(int(short_window)).mean()
-    return sma_short < (sma_long - std_long)
-
-
-def filter_price_above_vwap(df: pd.DataFrame) -> pd.Series:
-    """
-    (ex A41_PRICE_ABOVE_VWAP) Alpha#41 del paper: sqrt(high*low) - vwap,
-    qui come filtro booleano di posizionamento. True quando la media
-    geometrica di High/Low e' sopra il VWAP - regime "prezzo forte
-    rispetto al fair value della sessione".
-
-    Concettualmente il piu' adatto all'intraday di tutto il gruppo, ed e'
-    l'unico che usa il volume senza esserne danneggiato: il VWAP e' una
-    media di prezzi PESATA per volume, quindi molto piu' robusto alla
-    qualita' del tick volume di quanto lo sia un rapporto di volumi.
-
-    Richiede df["vwap"] - vedi engine.vwap_ops.vwap_anchored_daily e la
-    nota sull'ancoraggio in cima al file.
-    """
-    mid_geometrico = (df["High"] * df["Low"]) ** 0.5
-    return mid_geometrico > df["vwap"]
-
-
-def filter_price_below_vwap(df: pd.DataFrame) -> pd.Series:
-    """Speculare di F16: prezzo sotto il VWAP di sessione."""
-    mid_geometrico = (df["High"] * df["Low"]) ** 0.5
-    return mid_geometrico < df["vwap"]
-
-
-def filter_high_near_range_top(
-    df: pd.DataFrame,
-    window: float = 9,
-    threshold: float = 0.25,
-) -> pd.Series:
-    """
-    (ex A4_HIGH_NEAR_RANGE_TOP) True quando il massimo della barra e'
-    nella parte ALTA del proprio range recente.
-
-    Si usa ts_rank(-High) invece di ts_rank(High) > 1-threshold perche'
-    ts_rank su `window` barre assume solo `window` valori discreti: con
-    window=9 e threshold=0.25 il filtro basso cattura le posizioni 1 e 2,
-    mentre "> 0.75" ne catturerebbe TRE (7, 8, 9). Negando la serie il
-    rank riparte dall'alto e la soglia 0.25 cattura esattamente le due
-    posizioni piu' alte - stessa selettivita' del gemello, che e' il punto.
-
-    Su direction: e' un filtro POSIZIONALE, non di trend. direction=1
-    perche' descrive prezzo forte, ma su un'entry di inversione
-    (esaurimento) l'accoppiamento utile e' l'opposto. Vedi la nota in
-    cima al file.
-    """
-    return ts_rank(-df["High"], window) < threshold
 
 
 def filter_low_near_range_bottom(
@@ -533,32 +422,26 @@ def filter_low_near_range_bottom(
     una soglia sotto quel valore non farebbe mai scattare il filtro. Il
     default 0.25 include le due posizioni piu' basse.
 
-    Stessa avvertenza di F18: filtro posizionale, direction e' un default.
+    Filtro posizionale: direction e' un default, non una regola (vedi la
+    nota in cima al file). Lo speculare (massimo vicino al top del range)
+    e' stato eliminato il 1/10/2026.
     """
     return ts_rank(df["Low"], window) < threshold
 
 
 FILTRI = {
     "F1_ADX_ABOVE":              (filter_adx_above, 0, None),
-    "F2_LOW_VOLATILITY":         (filter_low_volatility, 0, None), #
-    "F2_MID_VOLATILITY":         (filter_mid_volatility, 0, None),
+    "F2_LOW_VOLATILITY":         (filter_low_volatility, 0, None),
     "F2_HIGH_VOLATILITY":        (filter_high_volatility, 0, None),
     "F3_VOLUME_ABOVE_AVG":       (filter_volume_above_avg, 0, None),
-    "F5_TALL_CANDLE":            (filter_tall_candle, 0, None),
-    "F6_VOLUME_ABOVE_AVG_50":    (filter_volume_above_avg_50, 0, None),
-    "F7_VOLUME_CLIMAX":          (filter_volume_climax, 0, None),
-    "F14_LOW_DRIFT_REGIME":      (filter_low_drift_regime, 0, None),
-    "F15_SHORT_TERM_CONSISTENCY": (filter_short_term_consistency, 0, None),
-    "F8_UPTREND_CONTEXT":        (filter_uptrend_context, 1, "TREND_CONTEXT"),
-    "F9_DOWNTREND_CONTEXT":      (filter_downtrend_context, -1, "TREND_CONTEXT"),
-    "F10_TREND_CONVICTION_UP":   (filter_trend_conviction_up, 1, "TREND_CONVICTION"),
-    "F11_TREND_CONVICTION_DOWN": (filter_trend_conviction_down, -1, "TREND_CONVICTION"),
-    "F12_EXTENDED_UP":           (filter_extended_up, 1, "EXTENDED_FROM_MEAN"),
-    "F13_EXTENDED_DOWN":         (filter_extended_down, -1, "EXTENDED_FROM_MEAN"),
-    "F16_PRICE_ABOVE_VWAP":      (filter_price_above_vwap, 1, "VWAP_POSITION"),
-    "F17_PRICE_BELOW_VWAP":      (filter_price_below_vwap, -1, "VWAP_POSITION"),
-    "F18_HIGH_NEAR_RANGE_TOP":   (filter_high_near_range_top, 1, "RANGE_POSITION"),
-    "F19_LOW_NEAR_RANGE_BOTTOM": (filter_low_near_range_bottom, -1, "RANGE_POSITION"),
+    "F4_TALL_CANDLE":            (filter_tall_candle, 0, None),
+    "F5_LOW_DRIFT_REGIME":       (filter_low_drift_regime, 0, None),
+    "F6_SHORT_TERM_CONSISTENCY": (filter_short_term_consistency, 0, None),
+    "F7_UPTREND_CONTEXT":        (filter_uptrend_context, 1, None),
+    "F8_TREND_CONVICTION_UP":    (filter_trend_conviction_up, 1, "TREND_CONVICTION"),
+    "F9_TREND_CONVICTION_DOWN":  (filter_trend_conviction_down, -1, "TREND_CONVICTION"),
+    "F10_EXTENDED_UP":           (filter_extended_up, 1, None),
+    "F11_LOW_NEAR_RANGE_BOTTOM": (filter_low_near_range_bottom, -1, None),
 }
 
 
@@ -566,7 +449,7 @@ def registra_filtri():
     """
     Registra tutti i filtri di questo file nel motore (engine.registry),
     cosi' filter_search_bt li trova da sola tramite get_filter(nome), e le
-    8 coppie tramite list_filter_pairs().
+    coppie tramite list_filter_pairs().
 
     Va chiamata una volta prima di usare i filtri. E' sicura da richiamare
     piu' volte nella stessa sessione: i nomi gia' registrati vengono

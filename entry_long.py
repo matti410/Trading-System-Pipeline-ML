@@ -123,18 +123,6 @@ def entry_big_tail_bars(
 
 
 # ------------------------------------------------------------- E8 --------
-def entry_closing_pattern_only(df: pd.DataFrame) -> pd.Series:
-    """
-    Close di 1 barra fa > Close di 3 barre fa E Close corrente > Close
-    di 2 barre fa E Close di 2 barre fa > Close di 1 barra fa ->
-    struttura di chiusure in accelerazione rialzista.
-    """
-    c = df["Close"]
-    cond = (c.shift(1) > c.shift(3)) & (c > c.shift(2)) & (c.shift(2) > c.shift(1))
-    return _evento(cond)
-
-
-# ------------------------------------------------------------- E9 --------
 def entry_closing_pattern_only_ii(df: pd.DataFrame) -> pd.Series:
     """
     Close di 1 barra fa < Close di 2 barre fa < Close di 5 barre fa <
@@ -151,13 +139,13 @@ def entry_closing_pattern_only_ii(df: pd.DataFrame) -> pd.Series:
     return _evento(cond)
 
 
-# ------------------------------------------------------------ E10 --------
+# ------------------------------------------------------------- E9 --------
 def entry_hammer(df: pd.DataFrame) -> pd.Series:
     """Hammer -> reversal rialzista dopo un downtrend."""
     return _cdl_bull(df, talib.CDLHAMMER)
 
 
-# ------------------------------------------------------------ E11 --------
+# ------------------------------------------------------------ E10 --------
 def entry_inverted_hammer(df: pd.DataFrame) -> pd.Series:
     """Inverted Hammer -> reversal rialzista dopo un downtrend."""
     return _cdl_bull(df, talib.CDLINVERTEDHAMMER)
@@ -168,7 +156,7 @@ def entry_inverted_hammer_confirmed(df: pd.DataFrame) -> pd.Series:
     return _confermato(_cdl_bull(df, talib.CDLINVERTEDHAMMER), _conferma_rialzista(df))
 
 
-# ------------------------------------------------------------ E12 --------
+# ------------------------------------------------------------ E11 --------
 def entry_engulfing(df: pd.DataFrame) -> pd.Series:
     """Bullish Engulfing."""
     return _cdl_bull(df, talib.CDLENGULFING)
@@ -179,7 +167,7 @@ def entry_engulfing_confirmed(df: pd.DataFrame) -> pd.Series:
     return _confermato(_cdl_bull(df, talib.CDLENGULFING), _conferma_rialzista(df))
 
 
-# ------------------------------------------------------------ E13 --------
+# ------------------------------------------------------------ E12 --------
 def entry_harami(df: pd.DataFrame) -> pd.Series:
     """Bullish Harami."""
     return _cdl_bull(df, talib.CDLHARAMI)
@@ -190,54 +178,13 @@ def entry_harami_confirmed(df: pd.DataFrame) -> pd.Series:
     return _confermato(_cdl_bull(df, talib.CDLHARAMI), _conferma_rialzista(df))
 
 
-# ------------------------------------------------------------ E14 --------
-def entry_harami_cross(df: pd.DataFrame) -> pd.Series:
-    """Bullish Harami Cross."""
-    return _cdl_bull(df, talib.CDLHARAMICROSS)
-
-
-def entry_harami_cross_confirmed(df: pd.DataFrame) -> pd.Series:
-    """Bullish Harami Cross + chiusura rialzista sulla barra successiva."""
-    return _confermato(_cdl_bull(df, talib.CDLHARAMICROSS), _conferma_rialzista(df))
-
-
-# ------------------------------------------------------------ E15 --------
-def entry_piercing(df: pd.DataFrame) -> pd.Series:
-    """Piercing Pattern -> reversal rialzista dopo un downtrend."""
-    return _cdl_bull(df, talib.CDLPIERCING)
-
-
-# ------------------------------------------------------------ E16 --------
+# ------------------------------------------------------------ E13 --------
 def entry_morning_star(df: pd.DataFrame) -> pd.Series:
     """Morning Star -> reversal rialzista dopo un downtrend."""
     return _cdl_bull(df, talib.CDLMORNINGSTAR)
 
 
-# ------------------------------------------------------------ E17 --------
-def entry_three_inside(df: pd.DataFrame) -> pd.Series:
-    """Three Inside Up."""
-    return _cdl_bull(df, talib.CDL3INSIDE)
-
-
-# ------------------------------------------------------------ E18 --------
-def entry_three_outside(df: pd.DataFrame) -> pd.Series:
-    """Three Outside Up."""
-    return _cdl_bull(df, talib.CDL3OUTSIDE)
-
-
-# ------------------------------------------------------------ E19 --------
-def entry_three_white_soldiers(df: pd.DataFrame) -> pd.Series:
-    """Three Advancing White Soldiers."""
-    return _cdl_bull(df, talib.CDL3WHITESOLDIERS)
-
-
-# ------------------------------------------------------------ E20 --------
-def entry_marubozu(df: pd.DataFrame) -> pd.Series:
-    """Bullish (Closing) Marubozu -> candela di piena convinzione rialzista."""
-    return _cdl_bull(df, talib.CDLMARUBOZU)
-
-
-# ------------------------------------------------------------ E21 --------
+# ------------------------------------------------------------ E14 --------
 def entry_belt_hold(df: pd.DataFrame) -> pd.Series:
     """Bullish Belt-hold."""
     return _cdl_bull(df, talib.CDLBELTHOLD)
@@ -259,25 +206,17 @@ TRIGGER_LONG = {
     "E5_QUICK_PULLBACK": entry_quick_pullback,
     "E6_BACK_IN_STYLE": entry_back_in_style,
     "E7_BIG_TAIL_BARS": entry_big_tail_bars,
-    "E8_CLOSING_PATTERN_ONLY": entry_closing_pattern_only,
-    "E9_CLOSING_PATTERN_ONLY_II": entry_closing_pattern_only_ii,
-    "E10_HAMMER": entry_hammer,
-    "E11_INVERTED_HAMMER": entry_inverted_hammer,
-    "E11_INVERTED_HAMMER_CONFIRMED": entry_inverted_hammer_confirmed,
-    "E12_ENGULFING": entry_engulfing,
-    "E12_ENGULFING_CONFIRMED": entry_engulfing_confirmed,
-    "E13_HARAMI": entry_harami,
-    "E13_HARAMI_CONFIRMED": entry_harami_confirmed,
-    "E14_HARAMI_CROSS": entry_harami_cross,
-    "E14_HARAMI_CROSS_CONFIRMED": entry_harami_cross_confirmed,
-    "E15_PIERCING": entry_piercing,
-    "E16_MORNING_STAR": entry_morning_star,
-    "E17_THREE_INSIDE": entry_three_inside,
-    "E18_THREE_OUTSIDE": entry_three_outside,
-    "E19_THREE_WHITE_SOLDIERS": entry_three_white_soldiers,
-    "E20_MARUBOZU": entry_marubozu,
-    "E21_BELT_HOLD": entry_belt_hold,
-    "E21_BELT_HOLD_CONFIRMED": entry_belt_hold_confirmed,
+    "E8_CLOSING_PATTERN_ONLY_II": entry_closing_pattern_only_ii,
+    "E9_HAMMER": entry_hammer,
+    "E10_INVERTED_HAMMER": entry_inverted_hammer,
+    "E10_INVERTED_HAMMER_CONFIRMED": entry_inverted_hammer_confirmed,
+    "E11_ENGULFING": entry_engulfing,
+    "E11_ENGULFING_CONFIRMED": entry_engulfing_confirmed,
+    "E12_HARAMI": entry_harami,
+    "E12_HARAMI_CONFIRMED": entry_harami_confirmed,
+    "E13_MORNING_STAR": entry_morning_star,
+    "E14_BELT_HOLD": entry_belt_hold,
+    "E14_BELT_HOLD_CONFIRMED": entry_belt_hold_confirmed,
 }
 
 

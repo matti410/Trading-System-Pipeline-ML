@@ -115,14 +115,6 @@ def entry_short_big_tail_bars(
 
 
 # ------------------------------------------------------------- E8 --------
-def entry_short_closing_pattern_only(df: pd.DataFrame) -> pd.Series:
-    """Speculare di closing-pattern-only: chiusure in accelerazione ribassista."""
-    c = df["Close"]
-    cond = (c.shift(1) < c.shift(3)) & (c < c.shift(2)) & (c.shift(2) < c.shift(1))
-    return _evento(cond)
-
-
-# ------------------------------------------------------------- E9 --------
 def entry_short_closing_pattern_only_ii(df: pd.DataFrame) -> pd.Series:
     """Speculare di closing-pattern-only-II, disuguaglianze invertite."""
     c = df["Close"]
@@ -135,13 +127,13 @@ def entry_short_closing_pattern_only_ii(df: pd.DataFrame) -> pd.Series:
     return _evento(cond)
 
 
-# ------------------------------------------------------------ E10 --------
+# ------------------------------------------------------------- E9 --------
 def entry_short_hanging_man(df: pd.DataFrame) -> pd.Series:
     """Hanging Man -> stessa geometria dell'Hammer, ma in coda a un uptrend."""
     return _cdl_bear(df, talib.CDLHANGINGMAN)
 
 
-# ------------------------------------------------------------ E11 --------
+# ------------------------------------------------------------ E10 --------
 def entry_short_shooting_star(df: pd.DataFrame) -> pd.Series:
     """Shooting Star -> reversal ribassista dopo un uptrend."""
     return _cdl_bear(df, talib.CDLSHOOTINGSTAR)
@@ -152,7 +144,7 @@ def entry_short_shooting_star_confirmed(df: pd.DataFrame) -> pd.Series:
     return _confermato(_cdl_bear(df, talib.CDLSHOOTINGSTAR), _conferma_ribassista(df))
 
 
-# ------------------------------------------------------------ E12 --------
+# ------------------------------------------------------------ E11 --------
 def entry_short_engulfing(df: pd.DataFrame) -> pd.Series:
     """Bearish Engulfing."""
     return _cdl_bear(df, talib.CDLENGULFING)
@@ -163,7 +155,7 @@ def entry_short_engulfing_confirmed(df: pd.DataFrame) -> pd.Series:
     return _confermato(_cdl_bear(df, talib.CDLENGULFING), _conferma_ribassista(df))
 
 
-# ------------------------------------------------------------ E13 --------
+# ------------------------------------------------------------ E12 --------
 def entry_short_harami(df: pd.DataFrame) -> pd.Series:
     """Bearish Harami."""
     return _cdl_bear(df, talib.CDLHARAMI)
@@ -174,54 +166,13 @@ def entry_short_harami_confirmed(df: pd.DataFrame) -> pd.Series:
     return _confermato(_cdl_bear(df, talib.CDLHARAMI), _conferma_ribassista(df))
 
 
-# ------------------------------------------------------------ E14 --------
-def entry_short_harami_cross(df: pd.DataFrame) -> pd.Series:
-    """Bearish Harami Cross."""
-    return _cdl_bear(df, talib.CDLHARAMICROSS)
-
-
-def entry_short_harami_cross_confirmed(df: pd.DataFrame) -> pd.Series:
-    """Bearish Harami Cross + chiusura ribassista sulla barra successiva."""
-    return _confermato(_cdl_bear(df, talib.CDLHARAMICROSS), _conferma_ribassista(df))
-
-
-# ------------------------------------------------------------ E15 --------
-def entry_short_dark_cloud_cover(df: pd.DataFrame) -> pd.Series:
-    """Dark Cloud Cover -> reversal ribassista dopo un uptrend."""
-    return _cdl_bear(df, talib.CDLDARKCLOUDCOVER)
-
-
-# ------------------------------------------------------------ E16 --------
+# ------------------------------------------------------------ E13 --------
 def entry_short_evening_star(df: pd.DataFrame) -> pd.Series:
     """Evening Star -> reversal ribassista dopo un uptrend."""
     return _cdl_bear(df, talib.CDLEVENINGSTAR)
 
 
-# ------------------------------------------------------------ E17 --------
-def entry_short_three_inside(df: pd.DataFrame) -> pd.Series:
-    """Three Inside Down."""
-    return _cdl_bear(df, talib.CDL3INSIDE)
-
-
-# ------------------------------------------------------------ E18 --------
-def entry_short_three_outside(df: pd.DataFrame) -> pd.Series:
-    """Three Outside Down."""
-    return _cdl_bear(df, talib.CDL3OUTSIDE)
-
-
-# ------------------------------------------------------------ E19 --------
-def entry_short_three_black_crows(df: pd.DataFrame) -> pd.Series:
-    """Three Black Crows -> speculare di Three White Soldiers."""
-    return _cdl_bear(df, talib.CDL3BLACKCROWS)
-
-
-# ------------------------------------------------------------ E20 --------
-def entry_short_marubozu(df: pd.DataFrame) -> pd.Series:
-    """Bearish Marubozu -> candela di piena convinzione ribassista."""
-    return _cdl_bear(df, talib.CDLMARUBOZU)
-
-
-# ------------------------------------------------------------ E21 --------
+# ------------------------------------------------------------ E14 --------
 def entry_short_belt_hold(df: pd.DataFrame) -> pd.Series:
     """Bearish Belt-hold."""
     return _cdl_bear(df, talib.CDLBELTHOLD)
@@ -244,25 +195,17 @@ TRIGGER_SHORT = {
     "E5_SHORT_QUICK_PULLBACK": entry_short_quick_pullback,
     "E6_SHORT_BACK_IN_STYLE": entry_short_back_in_style,
     "E7_SHORT_BIG_TAIL_BARS": entry_short_big_tail_bars,
-    "E8_SHORT_CLOSING_PATTERN_ONLY": entry_short_closing_pattern_only,
-    "E9_SHORT_CLOSING_PATTERN_ONLY_II": entry_short_closing_pattern_only_ii,
-    "E10_SHORT_HANGING_MAN": entry_short_hanging_man,
-    "E11_SHORT_SHOOTING_STAR": entry_short_shooting_star,
-    "E11_SHORT_SHOOTING_STAR_CONFIRMED": entry_short_shooting_star_confirmed,
-    "E12_SHORT_ENGULFING": entry_short_engulfing,
-    "E12_SHORT_ENGULFING_CONFIRMED": entry_short_engulfing_confirmed,
-    "E13_SHORT_HARAMI": entry_short_harami,
-    "E13_SHORT_HARAMI_CONFIRMED": entry_short_harami_confirmed,
-    "E14_SHORT_HARAMI_CROSS": entry_short_harami_cross,
-    "E14_SHORT_HARAMI_CROSS_CONFIRMED": entry_short_harami_cross_confirmed,
-    "E15_SHORT_DARK_CLOUD_COVER": entry_short_dark_cloud_cover,
-    "E16_SHORT_EVENING_STAR": entry_short_evening_star,
-    "E17_SHORT_THREE_INSIDE": entry_short_three_inside,
-    "E18_SHORT_THREE_OUTSIDE": entry_short_three_outside,
-    "E19_SHORT_THREE_BLACK_CROWS": entry_short_three_black_crows,
-    "E20_SHORT_MARUBOZU": entry_short_marubozu,
-    "E21_SHORT_BELT_HOLD": entry_short_belt_hold,
-    "E21_SHORT_BELT_HOLD_CONFIRMED": entry_short_belt_hold_confirmed,
+    "E8_SHORT_CLOSING_PATTERN_ONLY_II": entry_short_closing_pattern_only_ii,
+    "E9_SHORT_HANGING_MAN": entry_short_hanging_man,
+    "E10_SHORT_SHOOTING_STAR": entry_short_shooting_star,
+    "E10_SHORT_SHOOTING_STAR_CONFIRMED": entry_short_shooting_star_confirmed,
+    "E11_SHORT_ENGULFING": entry_short_engulfing,
+    "E11_SHORT_ENGULFING_CONFIRMED": entry_short_engulfing_confirmed,
+    "E12_SHORT_HARAMI": entry_short_harami,
+    "E12_SHORT_HARAMI_CONFIRMED": entry_short_harami_confirmed,
+    "E13_SHORT_EVENING_STAR": entry_short_evening_star,
+    "E14_SHORT_BELT_HOLD": entry_short_belt_hold,
+    "E14_SHORT_BELT_HOLD_CONFIRMED": entry_short_belt_hold_confirmed,
 }
 
 
