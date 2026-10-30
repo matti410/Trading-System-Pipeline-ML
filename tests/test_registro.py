@@ -42,7 +42,8 @@ def test_un_file_per_macchina_e_conto(tmp_path):
     assert registro.file_giornale(tmp_path, ds, "pc").exists()
     assert registro.file_giornale(tmp_path, ds, "colab").exists()
     assert registro.conta(tmp_path, ds) == {"addestramento": 1, "addestramento_collaudo": 1,
-                                            "oos": 2, "oos_collaudo": 1}
+                                            "oos": 2, "oos_collaudo": 1, "selezione": 0,
+                                            "selezione_collaudo": 0, "confronto": 0, "confronto_collaudo": 0}
     assert len(registro.leggi(tmp_path, ds)) == 3
 
 

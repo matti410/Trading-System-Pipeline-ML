@@ -189,8 +189,8 @@ LOOKAHEAD / DEGENERE).
 4. **Importanza fuori campione.** In ogni giro si allena LightGBM (`PARAMETRI_BASE`, pesi di unicità). Poi,
    sul blocco di validazione, si mescolano **insieme** le colonne di un gruppo: l'importanza è quanto
    peggiora la log-loss (media di 5 mescolamenti, semi fissi).
-5. **Stabilità e sonde.** Un gruppo si tiene solo se l'importanza è sopra zero in almeno 3 giri su 4 **e**
-   la sua importanza mediana supera quella della **sonda migliore** (§F).
+5. **Stabilità e sonde** (regola B, §F punto 7). Un gruppo si tiene solo se in almeno 3 giri su 4 la sua
+   importanza è sopra zero **e** sopra la **sonda migliore di quel giro**.
 6. **Numero finale**, regola fissata ora, dopo il punto 5: al massimo K = min(15, trigger di train / 100) gruppi, i più
    importanti per mediana fra quelli stabili. Poi si riallena su tutto il train con le feature scelte.
 
@@ -216,7 +216,8 @@ dopo aver visto il test.
 - `seleziona(importanze, n_train) -> (tenute, tabella_esiti)`: con la regola delle sonde, poi K.
 
 **Test:** i blocchi non si sovrappongono e rispettano purge ed embargo; con 1 feature vera e 20 di rumore,
-la vera si tiene e **nessuna** di rumore passa (§F); due copie della stessa feature
+la vera si tiene e nessuna di rumore passa, sugli 8 dataset inventati a semi fissi del §F (controllo del
+comportamento, non garanzia); due copie della stessa feature
 finiscono nello stesso gruppo; se entra una data del test, la funzione si ferma.
 
 **Cosa si vede:** la tabella della selezione per lato, poi AUC e fasce sul test del modello con le feature
@@ -296,9 +297,31 @@ scelte, accanto al modello base.
      barra 1) e un trade senza la barra s+H+1 resta aperto ed è escluso.
 6. **D6 sì**: sullo spot solo LONG.
 7. **§D, le sonde**: 10 colonne di rumore (seme fisso) entrano nei gruppi e nella permutazione come le
-   altre. Un gruppo si tiene solo se è stabile (3 giri su 4) **e** la sua importanza mediana supera la
-   sonda migliore. Poi vale K. Nella tabella si stampa la riga delle sonde. Test: con 20 feature di rumore
-   e 1 vera, nessuna di rumore passa.
+   altre. Nella tabella si stampa la riga delle sonde.
+   - **Regola aggiornata (regola B, decisione di Mattia del 30/10/2026):** un gruppo si tiene se in
+     almeno 3 giri su 4 la sua importanza è sopra zero **e** sopra la **sonda migliore di quel giro**.
+     Restano 10 sonde a seme fisso, 3 giri su 4 e K = min(15, trigger di train / 100).
+   - **Perché.** La regola di prima (stabile in 3 giri su 4 e mediana sopra la sonda migliore) lasciava
+     passare il rumore. Rumore e sonde sono statisticamente uguali, quindi ogni colonna di rumore ha circa 1
+     probabilità su 11 di battere la migliore di 10 sonde. Prova su 8 dataset inventati, ciascuno con
+     1 feature vera e 20 di rumore (5.000 trigger, semi da 0 a 7):
+
+     | caso | regola di prima | A: 100 sonde | B: sonda migliore giro per giro |
+     |---|---|---|---|
+     | 0 | vera + 1 di rumore | solo vera | solo vera |
+     | 1 | vera + 1 di rumore | solo vera | solo vera |
+     | 2 | solo vera | solo vera | solo vera |
+     | 3 | solo vera | solo vera | solo vera |
+     | 4 | vera + 3 di rumore | solo vera | solo vera |
+     | 5 | solo vera | vera + 1 di rumore | solo vera |
+     | 6 | vera + 4 di rumore | solo vera | solo vera |
+     | 7 | solo vera | solo vera | solo vera |
+     | **rumore passato** | **9** | **1** | **0** |
+
+     A costava circa 4 volte il tempo (32 s contro 8 s su questi dati).
+   - **Test:** gli stessi 8 dataset inventati, a semi fissi: con la regola B passa solo la vera. È un
+     **controllo del comportamento, non una garanzia**: su dati veri la probabilità che una colonna di
+     rumore passi è piccola, non zero (deve battere tutte e 10 le sonde in almeno 3 giri su 4).
 8. **§A, collegamento**: avviso ben visibile se V4 non è sul ramo `main` o ha modifiche non committate.
 
 Il codice del lavoro A è stato collaudato su V4 al ramo `main`, commit `ab62755`.
@@ -360,3 +383,85 @@ ancora nella X**: il modello resta quello del lavoro B.
   **Proposta per V4:** estendere `verifica_degenerazione` alle colonne continue;
 - riscaldamento stampato (barre NaN iniziali per colonna, più le barre che gli indicatori di V4 tolgono
   all'inizio). Non si taglia niente: la regola sui NaN è del lavoro D.
+
+---
+
+## §I · Chiusura del lavoro D (30/10/2026)
+
+**Fatto come §D**, con la regola B del §F e la regola sui NaN del revisore. Codice: `selezione.py`; funzioni
+del notebook in `pipeline.py` (`feature_lato`, `prepara_lato(..., feat=)`, `seleziona_lato`,
+`confronto_base_selezione`).
+
+**Dettagli fissati nel codice** (non cambiano le regole del §D):
+- **blocchi**: i trigger di train, in ordine di tempo, divisi in 5 blocchi con lo stesso numero di trigger;
+- **importanza**: il modello di ogni giro vede tutte le candidate, più l'identità del trigger e le sonde. Si
+  mescolano insieme le colonne di un gruppo; del gruppo tenuto entra nel modello finale la rappresentante;
+- **gruppi**: legame «average» su 1 − |ρ|, tagliato a 0,3. Rappresentante = |ρ| medio più alto verso le altre
+  del gruppo;
+- **NaN**: i trigger nel riscaldamento delle feature si tolgono dal target del lato prima dello split, per tutti
+  e due i modelli. Quanti, si stampa. I NaN sparsi restano: LightGBM li gestisce. Spearman a coppie.
+
+**Regola fissata prima:** soglia, confronti D3, OOS e backtest usano sempre il modello con la selezione; il
+modello base è solo un riferimento. Selezione e confronto base/selezione si scrivono in `registro_ml` (tipi
+`selezione` e `confronto`).
+
+**Comportamento nel collaudo** (BINANCE_PERP_BTCUSDT M15, valori di collaudo E10_HAMMER H 16,
+E10_SHORT_HANGING_MAN H 32):
+
+| lato | trigger tolti (riscaldamento) | candidate | tenute | instabili | sotto la sonda del giro | doppioni | oltre K | tempo |
+|---|---|---|---|---|---|---|---|---|
+| LONG | 86 | 106 + 10 sonde | 0 | 57 | 17 | 32 | 0 | 20 s |
+| SHORT | 55 | 106 + 10 sonde | 0 | 58 | 13 | 35 | 0 | 13 s |
+
+**Il caso «nessuna feature tenuta».** Se la selezione non tiene nessuna feature, il modello con la selezione
+ha solo l'identità del trigger. Con un trigger solo per lato questa colonna è costante, quindi il modello dà a
+tutti la stessa probabilità. Senza protezione, la «fascia 5» prendeva il 100% dei trigger.
+
+**Decisione di Mattia (30/10/2026).** La regola di selezione non cambia.
+1. Se la selezione di un lato tiene 0 feature, il notebook lo scrive in chiaro («LONG: la selezione non ha
+   tenuto nessuna feature, il modello non distingue i trigger»). Per quel lato i passi 8 e 9 mostrano solo
+   «tutti i trigger», senza fasce né soglia. Il COMBINATO «modello» del backtest si mostra solo se tutti i
+   lati hanno il modello.
+2. Protezione generale (`oos.controlla_fasce`, usata da soglia, OOS, confronti e backtest, e la stessa regola
+   nelle fasce del test di `modello.valuta`): se le probabilità del test hanno meno valori distinti di
+   n_fasce, le fasce non si calcolano e si stampa il motivo.
+
+**Test di potenza (caratteristica dello strumento, non un passo della pipeline).** `tests/test_potenza.py`,
+gradini e semi fissati prima di guardare i risultati.
+- Dataset inventati come quelli del §F: 5.000 trigger, 1 feature vera e 20 di rumore.
+- Forza = coefficiente della vera (normale standard) nella probabilità del target,
+  P(y = 1) = 1 / (1 + e^(−forza · vera)).
+- 3 semi per gradino. «AUC» = l'AUC che la sola feature vera dà sui blocchi di validazione (media dei 4 giri).
+
+| forza | vera tenuta | AUC della vera da sola | colonne di rumore passate (sui 3 semi) |
+|---|---|---|---|
+| 0,50 | 3 su 3 | 0,639 | 0 |
+| 0,30 | 3 su 3 | 0,580 | 1 |
+| 0,20 | 2 su 3 | 0,556 | 0 |
+| 0,15 | 3 su 3 | 0,545 | 1 |
+| 0,10 | 1 su 3 | 0,515 | 1 |
+| 0,07 | 0 su 3 | 0,517 | 1 |
+| 0,05 | 0 su 3 | 0,515 | 3 |
+| 0,03 | 0 su 3 | 0,508 | 1 |
+| 0 | 0 su 3 | 0,494 | 0 |
+
+**Soglia dello strumento.** Su questi dataset la procedura vede la feature vera quasi sempre quando, da sola,
+dà un'AUC di circa **0,545 o più** (forza 0,15). La vede una volta su tre intorno a 0,515 (forza 0,10). Non
+la vede più sotto (forza 0,07 e meno, AUC circa 0,52 o meno).
+
+**Rumore che passa.** Con la feature vera debole o assente, a volte passa una colonna di rumore: 8 volte in 27
+dataset. Negli 8 casi del §F (forza 1, feature vera forte) non era successo. Conferma che la regola B è un
+controllo, non una garanzia: la probabilità che il rumore passi è piccola, non zero, ed è più alta quando nelle
+candidate non c'è niente di forte.
+
+**Perché il rumore passa (caratteristica nota).** I 4 giri ad allargamento **non sono indipendenti**.
+- Il fit di ogni giro contiene tutto il fit del giro prima (blocchi 1, 1–2, 1–3, 1–4). I quattro modelli sono
+  quindi allenati in gran parte sugli stessi trigger e tendono a fare gli stessi split.
+- Una colonna di rumore che per caso il modello usa nei primi blocchi tende a essere usata di nuovo nei giri
+  dopo, e a dare importanza sopra zero più volte.
+- «3 giri su 4 sopra la sonda migliore» non sono quindi tre prove indipendenti. La probabilità che il rumore
+  passi è più alta di quella che si avrebbe con giri indipendenti, circa 4 · (1/11)³ ≈ 0,3% per colonna.
+- L'effetto cresce quando nelle candidate non c'è niente di forte: gli alberi fanno più split sulle colonne
+  di rumore, e la loro importanza varia di più fra una colonna e l'altra.
+
+Non si corregge qui: è una caratteristica dello strumento, da tenere presente leggendo le feature tenute.

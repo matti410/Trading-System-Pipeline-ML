@@ -4,6 +4,7 @@ Applicazione del modello all'OOS con soglia fissata sul test.
 Modulo ADDITIVO (29/9/2026): non modifica nessun file esistente.
 
   indici_oos(target, df_is)                       -> DatetimeIndex
+  controlla_fasce(p_test, n_fasce=5)              -> None, o FasceNonCalcolabili
   soglia_dal_test(modello, X, idx_test, fasce=5, n_fasce=5)
                                                   -> (bassa, alta)
   valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5)
@@ -21,9 +22,26 @@ REGOLA (decisioni del 29/9)
   piu' bassa selezionata non ha limite inferiore se e' la 1, la piu' alta
   non ha limite superiore se e' l'ultima: un trigger OOS con probabilita'
   oltre il massimo visto nel test viene comunque preso.
+- Protezione (lavoro D, decisione di Mattia del 30/10/2026): se le probabilita'
+  del test hanno meno valori distinti di n_fasce, le fasce non si calcolano e
+  si stampa il motivo (FasceNonCalcolabili). Senza, un modello che da' a tutti
+  la stessa probabilita' farebbe «fascia 5» = 100% dei trigger.
 """
 import numpy as np
 import pandas as pd
+
+
+class FasceNonCalcolabili(ValueError):
+    """Le probabilita' del test non bastano per dividere il test in fasce."""
+
+
+def controlla_fasce(p_test, n_fasce=5):
+    """Si ferma (FasceNonCalcolabili, con il motivo) se p_test ha meno valori distinti di n_fasce."""
+    distinti = len(np.unique(np.asarray(p_test)))
+    if distinti < n_fasce:
+        raise FasceNonCalcolabili(
+            f"le probabilità del test hanno {distinti} valor{'e' if distinti == 1 else 'i'} distint"
+            f"{'o' if distinti == 1 else 'i'}, meno delle {n_fasce} fasce: fasce e soglia non si calcolano")
 
 
 def indici_oos(target, df_is):
@@ -55,27 +73,45 @@ def soglia_dal_test(modello, X, idx_test, fasce=5, n_fasce=5):
     """
     da, a = _intervallo(fasce, n_fasce)
     p_te = modello.predict_proba(X.loc[idx_test])[:, 1]
+    controlla_fasce(p_te, n_fasce)
     confini = np.quantile(p_te, np.linspace(0, 1, n_fasce + 1))
     bassa = -np.inf if da == 1 else confini[da - 1]
     alta = np.inf if a == n_fasce else confini[a]
     return bassa, alta
 
 
-def valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5):
+def _solo_tutti(y, rend, idx_test, idx_oos):
+    righe = []
+    for nome, idx in (("test", idx_test), ("OOS", idx_oos)):
+        yy = y.loc[idx].to_numpy()
+        bp = rend.loc[idx].to_numpy() * 1e4
+        righe.append(_riga(f"{nome} tutti", None, yy, bp, np.ones(len(idx), dtype=bool), len(idx)))
+    return pd.DataFrame(righe).set_index("").round({"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2})
+
+
+def valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5, solo_tutti=False):
     """
     Ricava la soglia dalle fasce del test e la applica all'OOS.
     Stampa soglia e distribuzione delle probabilita' test vs OOS,
     restituisce la tabella: test (selezionati / tutti), OOS (selezionati / tutti).
+    Con solo_tutti=True, o se le fasce non si calcolano (FasceNonCalcolabili, il motivo
+    si stampa), la tabella ha solo «test tutti» e «OOS tutti»: niente fasce, niente soglia.
     """
     if len(idx_oos) == 0:
         raise ValueError("idx_oos vuoto")
     if idx_oos.min() <= idx_test.max():
         raise ValueError("l'OOS deve venire tutto dopo il test")
     da, a = _intervallo(fasce, n_fasce)
+    if solo_tutti:
+        return _solo_tutti(y, rend, idx_test, idx_oos)
 
     p_te = modello.predict_proba(X.loc[idx_test])[:, 1]
     p_oo = modello.predict_proba(X.loc[idx_oos])[:, 1]
-    soglia_bassa, soglia_alta = soglia_dal_test(modello, X, idx_test, fasce, n_fasce)
+    try:
+        soglia_bassa, soglia_alta = soglia_dal_test(modello, X, idx_test, fasce, n_fasce)
+    except FasceNonCalcolabili as e:
+        print(f"OOS: {e}. Si mostrano solo «tutti i trigger».")
+        return _solo_tutti(y, rend, idx_test, idx_oos)
 
     def seleziona(p):
         return (p >= soglia_bassa) & (p < soglia_alta)
