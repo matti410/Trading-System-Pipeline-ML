@@ -60,35 +60,90 @@ def barre_train(ds, quota: float = 0.8) -> pd.DataFrame:
     return ds.df_is.iloc[:barra_confine(ds.df_is, quota)]
 
 
+# Il minimo di occorrenze piu' basso che run_event_study di V4 accetta: 0 («Metti 0 per tenerle
+# tutte», docstring di V4). Cosi' nessun trigger esce dall'event study (precisazione di Mattia,
+# 30/10/2026): i trigger sotto il minimo del Lab (vetrina.MIN_TRIGGER) restano visibili, con un segno.
+MIN_TRADES_EVENT_STUDY = 0
+
+
 def event_study_train(ds, direzione: int, H: int, quota: float = 0.8, trigger=None):
     """
-    L'event study di V4 sulle sole barre del train, con tutti i trigger candidati del
-    lato (o quelli di `trigger`) e il min_trades del Lab. Ritorna l'EventStudy di V4.
+    L'event study di V4 sulle sole barre del train, con TUTTI i trigger candidati del lato
+    (o quelli di `trigger`), senza minimo di occorrenze. Ritorna l'EventStudy di V4.
     """
     from engine.event_study import run_event_study
-    from engine.vetrina import MIN_TRIGGER
     if direzione == -1 and ds.solo_long:
         raise ValueError("Sullo spot lo short non esiste: niente event study SHORT.")
     candidati = list(trigger) if trigger is not None else (ds.trigger_long if direzione == 1 else ds.trigger_short)
-    return run_event_study(barre_train(ds, quota), entry_names=candidati, horizon=int(H),
-                           min_trades=MIN_TRIGGER, pip=ds.pip, verbose=False)
+    ev = run_event_study(barre_train(ds, quota), entry_names=candidati, horizon=int(H),
+                         min_trades=MIN_TRADES_EVENT_STUDY, pip=ds.pip, verbose=False)
+    # i trigger che nel train non scattano mai non hanno curva: V4 non li mette nella sintesi.
+    # Si ricordano qui, cosi' la sintesi e il grafico li mostrano comunque (0 occorrenze).
+    ev.candidati_richiesti = candidati
+    return ev
+
+
+def occorrenze_train(ev) -> dict:
+    """Le occorrenze di ogni trigger nel train, come le conta l'event study di V4 (dopo la quarantena)."""
+    if ev is None:
+        return {}
+    conta = {nome: 0 for nome in getattr(ev, "candidati_richiesti", [])}
+    conta.update(dict(zip(ev.sintesi["candidato"], ev.sintesi["trades"].astype(int))))
+    conta.update({nome: int(n) for nome, n in ev.scartate})
+    return conta
 
 
 def sintesi_event_study(ev, timeframe: str) -> pd.DataFrame:
-    """La sintesi di V4, nell'ordine di V4, con le ore accanto alla barra del picco."""
+    """
+    La sintesi di V4, nell'ordine di V4, con le ore accanto alla barra del picco e un segno
+    sui trigger con meno occorrenze nel train del minimo del Lab. Non toglie nessun trigger.
+    """
+    from engine.vetrina import MIN_TRIGGER
     colonne = ["candidato", "trades", "barra_picco", "picco_pct", "incertezza_pct", "volte_incertezza",
                "oltre_rumore", "a_fine_pct", "vs_mercato_pct"]
     s = ev.sintesi[[c for c in colonne if c in ev.sintesi.columns]].copy()
     s.insert(s.columns.get_loc("barra_picco") + 1, "ore_picco", [ore(b, timeframe) for b in s["barra_picco"]])
+    senza = [c for c in getattr(ev, "candidati_richiesti", []) if c not in set(s["candidato"])]
+    if senza:
+        s = pd.concat([s, pd.DataFrame({"candidato": senza, "trades": 0})], ignore_index=True)
+    s.insert(s.columns.get_loc("trades") + 1, f"sotto_minimo_Lab_{MIN_TRIGGER}",
+             ["◄ sotto il minimo" + (" (nessuna occorrenza: nessuna curva)" if n == 0 else "")
+              if n < MIN_TRIGGER else "" for n in s["trades"]])
     return s
 
 
-def controlla_scelta(ds, trigger, H, direzione: int) -> bool:
+def grafico_event_study(ev, titolo: str = ""):
+    """
+    Le curve dell'event study con il grafico di V4 (EventStudy.plot), per TUTTI i trigger
+    misurati, con le occorrenze nel train accanto al nome (nella legenda). Ritorna le etichette.
+    """
+    import copy
+    n = occorrenze_train(ev)
+    etichetta = {c: f"{c} ({n.get(c, 0)} nel train)" for c in ev.curve.columns}
+    copia = copy.copy(ev)
+    copia.curve = ev.curve.rename(columns=etichetta)
+    copia.mercato = ev.mercato.rename(columns=etichetta)
+    copia.sintesi = ev.sintesi.assign(candidato=ev.sintesi["candidato"].map(etichetta))
+    nomi = list(etichetta.values())
+    senza = [c for c in getattr(ev, "candidati_richiesti", list(ev.curve.columns))
+             if c not in ev.curve.columns or ev.curve[c].isna().all()]
+    if titolo:
+        print(titolo)
+    copia.plot(candidati=nomi, figsize=(13, 7.5))       # il grafico di V4: si mostra da se'
+    if senza:
+        print(f"senza curva (nessuna occorrenza nel train): {', '.join(senza)}")
+    return nomi + [f"{c} (0 nel train, senza curva)" for c in senza if c not in ev.curve.columns]
+
+
+def controlla_scelta(ds, trigger, H, direzione: int, occorrenze=None) -> bool:
     """
     Controlla la scelta di Mattia per un lato. True = il lato si usa; False = lato
     saltato (lo short sullo spot, lasciato vuoto). Si ferma se manca la scelta, se un
     nome non e' un trigger del lato, se H non e' un numero di barre >= 1, o se si
     chiede lo short sullo spot.
+
+    occorrenze: le occorrenze nel train di ogni trigger (occorrenze_train). Un trigger
+    scelto sotto il minimo del Lab da' un AVVISO ben visibile, ma non ferma niente.
     """
     nome = NOMI_LATO[direzione]
     trigger = list(trigger or [])
@@ -107,6 +162,13 @@ def controlla_scelta(ds, trigger, H, direzione: int) -> bool:
     if estranei:
         raise ValueError(f"Non sono trigger {nome} del Lab: {estranei}. I nomi sono nella sintesi dell'event study.")
     print(f"{nome}: {len(trigger)} trigger, H = {H} barre ({ore(H, ds.timeframe)})")
+    from engine.vetrina import MIN_TRIGGER
+    pochi = {t: occorrenze[t] for t in trigger if occorrenze and t in occorrenze and occorrenze[t] < MIN_TRIGGER}
+    if pochi:
+        riga = "!" * 78
+        dettaglio = ", ".join(f"{t}: {n} occorrenze" for t, n in pochi.items())
+        print(f"{riga}\n!!! AVVISO · {nome}: trigger con meno occorrenze nel train del minimo del Lab "
+              f"({MIN_TRIGGER}): {dettaglio}.\n!!! La scelta resta valida: il notebook va avanti.\n{riga}")
     return True
 
 

@@ -88,3 +88,55 @@ def test_split_con_H_diversi_per_lato():
     # H=12: embargo via 108 (uscita 121), 112, 115; purge via 140 (uscita 153) e 145
     assert list(df_is.index.get_indexer(tr12)) == [100]
     assert list(df_is.index.get_indexer(te12)) == [125, 135]
+
+
+def _con_trigger_finti(ds):
+    """Due trigger LONG registrati solo per il test: uno raro (37 nel train) e uno che non scatta mai."""
+    from engine import registry
+
+    def raro(df):
+        s = pd.Series(False, index=df.index)
+        s.iloc[5000::4000] = True
+        return s
+    registry.register_entry("E98_MAI_TEST", 1)(lambda df: pd.Series(False, index=df.index))
+    registry.register_entry("E99_RARO_TEST", 1)(raro)
+    df = ds.df.assign(E99_RARO_TEST=raro(ds.df), E98_MAI_TEST=False)
+    return dataclasses.replace(ds, df=df, df_is=df.loc[ds.df_is.index],
+                               trigger_long=ds.trigger_long + ["E99_RARO_TEST", "E98_MAI_TEST"])
+
+
+def test_trigger_raro_visibile_e_avviso(ds_vero, capsys, monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from engine import registry
+    from engine.vetrina import MIN_TRIGGER
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+    ds = _con_trigger_finti(ds_vero)
+    try:
+        ev = pipeline.event_study_train(ds, 1, 32, trigger=[ds.trigger_long[0], "E99_RARO_TEST", "E98_MAI_TEST"])
+        s = pipeline.sintesi_event_study(ev, "M15")
+        segno = s.set_index("candidato")[f"sotto_minimo_Lab_{MIN_TRIGGER}"]
+        n = pipeline.occorrenze_train(ev)
+        assert 0 < n["E99_RARO_TEST"] < MIN_TRIGGER and n["E98_MAI_TEST"] == 0
+        assert segno["E99_RARO_TEST"].startswith("◄") and segno["E98_MAI_TEST"].startswith("◄")
+        assert segno[ds.trigger_long[0]] == ""
+        etichette = pipeline.grafico_event_study(ev)
+        legenda = [t.get_text() for t in plt.gcf().axes[0].get_legend().get_texts()]
+        assert f"E99_RARO_TEST ({n['E99_RARO_TEST']} nel train)" in legenda          # nel grafico, con il numero
+        assert any(e.startswith("E98_MAI_TEST") for e in etichette)
+        assert "E98_MAI_TEST" in capsys.readouterr().out                             # senza curva, ma nominato
+        plt.close("all")
+        # controlla_scelta avvisa e non si ferma
+        assert pipeline.controlla_scelta(ds, ["E99_RARO_TEST"], 16, 1, occorrenze=n) is True
+        uscita = capsys.readouterr().out
+        assert "!!! AVVISO" in uscita and f"E99_RARO_TEST: {n['E99_RARO_TEST']} occorrenze" in uscita
+        assert pipeline.controlla_scelta(ds, [ds.trigger_long[0]], 16, 1, occorrenze=n) is True
+        assert "AVVISO" not in capsys.readouterr().out
+    finally:
+        registry.remove_entries("E98_MAI_TEST")
+        registry.remove_entries("E99_RARO_TEST")
+
+
+def test_event_study_senza_minimo():
+    assert pipeline.MIN_TRADES_EVENT_STUDY == 0
