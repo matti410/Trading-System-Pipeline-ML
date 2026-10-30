@@ -1,8 +1,8 @@
 # 00 · Stato (aggiornato al 30/10/2026)
 
-**Incarico in corso:** **lavoro B** (pipeline base crypto) di `docs/02_PROPOSTA_CONVERSIONE.md`, §B e §F:
-codice sul ramo `lavoro-b-pipeline`, in revisione (chiusura in docs/02 §G).
-Il lavoro A (pulizia e collegamento a V4) è fatto: PR #1, unita. C e D vengono dopo, ognuno con il suo via.
+**Incarico in corso:** **lavoro D** (feature selection, con le sonde) di `docs/02_PROPOSTA_CONVERSIONE.md`,
+§D e §F.
+Fatti: lavoro A (PR #1), lavoro B (PR #2), lavoro C (PR #3, catalogo delle feature; decisioni in docs/02 §H).
 
 ## Com'è il repo oggi
 Una prima bozza fatta su EURUSD M15 con una copia del vecchio motore (V3).
@@ -20,6 +20,7 @@ I moduli ML funzionano e sono collaudati su EURUSD:
 | `pipeline.py` | le funzioni delle celle del notebook (lavoro B) |
 | `confronti.py` | i due confronti fissi sul test, D3 (lavoro B) |
 | `registro.py` | il registro delle prove in `registro_ml/`, D4 (lavoro B) |
+| `feature/` | il catalogo delle 73 feature di contesto e i suoi collaudi (lavoro C); non ancora nella X |
 
 Con il lavoro A:
 - tolte le copie V3 (`engine/`, entry, filtri, `helpers.py`), i costi IC Markets e il CSV EURUSD;

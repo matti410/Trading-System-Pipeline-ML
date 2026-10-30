@@ -326,3 +326,37 @@ Il codice del lavoro A è stato collaudato su V4 al ramo `main`, commit `ab62755
 - Trade, vincenti, trade medio e profit factor si calcolano sui trade uniti; il totale è la somma dei bp.
 - La curva è la somma cumulata dei bp di tutti i trade; il max drawdown si misura su quella curva.
 - Esposizione: quota delle barre del periodo con almeno un lato aperto. Saltati: somma dei due lati.
+
+---
+
+## §H · Chiusura del lavoro C (30/10/2026)
+
+**Fatto come §C**, con le precisazioni di Mattia sulla causalità. Il catalogo ha 73 feature in 11
+famiglie (`feature/catalogo.py`); calcolo e collaudi sono in `feature/calcolo.py`. Le feature **non entrano
+ancora nella X**: il modello resta quello del lavoro B.
+
+**Punti che il §C non fissava** (decisioni di Mattia del 30/10/2026 sui punti 1–3).
+1. `vr_24h`: `indicatori.variance_ratio` di V4 con finestra 24 h e **passo fissato in ore: 1 ora** (4 barre
+   su M15, come prima; 12 su M5). **Decisione:** se 1 ora è meno di 2 barre del timeframe (H1, H4), la
+   feature non si calcola e si stampa.
+2. `vol_ora`: «stessa ora» = stesso orario UTC della barra (su M15, la barra delle 10:15 si confronta con
+   quelle delle 10:15). «Ultimi 20 giorni» = le 20 barre precedenti con quell'orario: con un buco nei dati
+   si va indietro di qualche giorno in più. **Decisione:** va bene così.
+3. `dist_vwap_W`: V4 ha solo il VWAP ancorato al giorno (`vwap_ops.vwap_anchored_daily`). Il VWAP mobile su
+   W si calcola qui, con lo stesso prezzo tipico (H+L+C)/3. **Decisione:** va bene così. Resta la
+   **proposta per V4**: un VWAP mobile in `vwap_ops`.
+4. `er_W` è il Kaufman di V4 **con il segno** (da −1 a +1), come lo calcola V4.
+5. Divisioni per zero (σ nulla, range nullo in `pos_range_W`, Σ|r| nullo) → NaN; volume zero in
+   `vol_z_168h` → NaN; candela con range nullo → 0 (§C).
+6. `da_trig_prec` senza trigger precedente → 1 (il tetto).
+7. `pend_W` e `r2_W` si calcolano finestra per finestra con il tempo centrato. La covarianza mobile di
+   pandas, che moltiplica il tempo assoluto per ln C, sbagliava di circa 1e-8 con i prezzi ×10. La formula
+   è la stessa e un test la confronta con `np.polyfit`.
+
+**Collaudi** (`collaudo_catalogo`, cella 2b del notebook):
+- lookahead con `verifica_lookahead` di V4 su un pezzo dell'inizio dell'in-sample, con i tagli standard di
+  V4 (uno per orario del giorno);
+- degenerazione delle colonne continue sulle sole barre dell'in-sample. Soglie del §C: 95%, 30.
+  **Proposta per V4:** estendere `verifica_degenerazione` alle colonne continue;
+- riscaldamento stampato (barre NaN iniziali per colonna, più le barre che gli indicatori di V4 tolgono
+  all'inizio). Non si taglia niente: la regola sui NaN è del lavoro D.
