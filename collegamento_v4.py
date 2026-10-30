@@ -4,6 +4,8 @@ Collegamento al Lab (V4), in sola lettura (30/10/2026, docs/02 §A).
   collega(percorso=None, ramo="main") -> dict
       trova V4, lo mette in sys.path, controlla che `engine` venga da li',
       stampa ramo e commit (con un avviso se non e' main o ha modifiche)
+  versione() -> dict
+      ramo, commit e modifiche locali di V4 (per il registro delle prove)
   cartella_dati(su_colab=None) -> str
       la stessa cartella dei dati del Lab (Drive per desktop o dati/ di V4)
 
@@ -142,6 +144,11 @@ def collega(percorso=None, ramo: str = RAMO_ATTESO, verbose: bool = True) -> dic
     if verbose:
         _stampa(info)
     return info
+
+
+def versione() -> dict:
+    """Ramo, commit e modifiche locali dell'ultimo collegamento (per il registro)."""
+    return {k: _INFO.get(k) for k in ("ramo", "commit", "modifiche_locali")}
 
 
 def cartella_dati(colab: bool | None = None) -> str:

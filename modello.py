@@ -8,7 +8,8 @@ Funzioni:
   rendimenti_trigger(target)
       -> Series: guadagno NETTO di ogni trigger (frazione), dal target
 
-  addestra(X, y, idx_train, idx_test)
+  addestra(X, y, idx_train, idx_test, parametri=None, pesi=None,
+           peso_rendimento=False, netto_bp=None)
       -> modello LightGBM addestrato solo sulle righe di train
 
   valuta(modello, X, y, rend, idx_train, idx_test)
@@ -28,6 +29,8 @@ import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
 from sklearn.metrics import roc_auc_score
+
+from pesi import pesi_rendimento
 
 # impostazioni prudenti, NON ottimizzate (primo giro = modello di base)
 PARAMETRI_BASE = dict(
@@ -60,13 +63,18 @@ def _controlla_split(idx_train, idx_test):
                          "usa gli indici di split_train_test")
 
 
-def addestra(X, y, idx_train, idx_test, parametri=None, pesi=None):
+def addestra(X, y, idx_train, idx_test, parametri=None, pesi=None,
+             peso_rendimento=False, netto_bp=None):
     """
     Addestra LightGBM SOLO sulle righe idx_train. idx_test serve solo al
     controllo: se il train non viene tutto prima del test, si ferma.
 
-    pesi : None (default, modello di base) oppure Series da
-           pesi.pesi_unicita(idx_train, ...), indicizzata su idx_train.
+    pesi            : None (modello senza pesi) oppure Series da
+                      pesi.pesi_unicita(idx_train, ...), indicizzata su idx_train.
+    peso_rendimento : interruttore D1, SPENTO di default. Acceso, ogni riga pesa
+                      anche min(|netto_bp|, 95° percentile del train)
+                      (pesi.pesi_rendimento): peso = unicita' x rendimento,
+                      riportato a media 1. Serve netto_bp (la colonna del target).
     """
     _controlla_split(idx_train, idx_test)
     sw = None
@@ -74,6 +82,12 @@ def addestra(X, y, idx_train, idx_test, parametri=None, pesi=None):
         if not pesi.index.equals(idx_train):
             raise ValueError("i pesi devono essere calcolati su idx_train (stesso indice)")
         sw = pesi.to_numpy()
+    if peso_rendimento:
+        if netto_bp is None:
+            raise ValueError("peso_rendimento=True vuole netto_bp (la colonna netto_bp del target)")
+        r = pesi_rendimento(netto_bp.loc[idx_train]).to_numpy()
+        sw = r if sw is None else sw * r
+        sw = sw / sw.mean()
     modello = LGBMClassifier(**(parametri or PARAMETRI_BASE))
     modello.fit(X.loc[idx_train], y.loc[idx_train], sample_weight=sw)
     return modello
@@ -91,7 +105,7 @@ def valuta(modello, X, y, rend, idx_train, idx_test, n_fasce=5):
     numerosita', dalla probabilita' piu' bassa (1) alla piu' alta, piu'
     la riga di riferimento "tutti".
 
-    rend : Series da rendimenti_trigger (almeno sulle righe di test).
+    rend : Series da rendimenti_trigger (netto, almeno sulle righe di test).
     """
     _controlla_split(idx_train, idx_test)
     p_tr = modello.predict_proba(X.loc[idx_train])[:, 1]
@@ -112,12 +126,12 @@ def valuta(modello, X, y, rend, idx_train, idx_test, n_fasce=5):
     for f, g in t.groupby("fascia", observed=True):
         righe.append({"fascia": str(f), "prob_da": g.p.min(), "prob_a": g.p.max(),
                       "trade": len(g), "vincenti_%": 100 * g.y.mean(),
-                      "bp_medi_lordi": g.bp.mean()})
+                      "bp_medi_netti": g.bp.mean()})
     righe.append({"fascia": "tutti", "prob_da": t.p.min(), "prob_a": t.p.max(),
                   "trade": len(t), "vincenti_%": 100 * t.y.mean(),
-                  "bp_medi_lordi": t.bp.mean()})
+                  "bp_medi_netti": t.bp.mean()})
     return pd.DataFrame(righe).set_index("fascia").round(
-        {"prob_da": 3, "prob_a": 3, "vincenti_%": 1, "bp_medi_lordi": 2})
+        {"prob_da": 3, "prob_a": 3, "vincenti_%": 1, "bp_medi_netti": 2})
 
 
 def importanza(modello, X):

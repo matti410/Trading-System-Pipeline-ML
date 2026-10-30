@@ -4,6 +4,8 @@ Applicazione del modello all'OOS con soglia fissata sul test.
 Modulo ADDITIVO (29/9/2026): non modifica nessun file esistente.
 
   indici_oos(target, df_is)                       -> DatetimeIndex
+  soglia_dal_test(modello, X, idx_test, fasce=5, n_fasce=5)
+                                                  -> (bassa, alta)
   valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5)
                                                   -> DataFrame di confronto
 
@@ -42,7 +44,21 @@ def _riga(nome, p, y, bp, presi, totale):
     return {"": nome, "trade": int(presi.sum()),
             "presi_%": 100 * presi.sum() / totale,
             "vincenti_%": 100 * y[presi].mean() if presi.any() else np.nan,
-            "bp_medi_lordi": bp[presi].mean() if presi.any() else np.nan}
+            "bp_medi_netti": bp[presi].mean() if presi.any() else np.nan}
+
+
+def soglia_dal_test(modello, X, idx_test, fasce=5, n_fasce=5):
+    """
+    I limiti di probabilita' della fascia scelta, dai SOLI quantili delle
+    probabilita' del test. -inf / +inf ai due estremi (fascia 1 e ultima).
+    Stessa regola per valuta_oos, per i confronti sul test e per il backtest.
+    """
+    da, a = _intervallo(fasce, n_fasce)
+    p_te = modello.predict_proba(X.loc[idx_test])[:, 1]
+    confini = np.quantile(p_te, np.linspace(0, 1, n_fasce + 1))
+    bassa = -np.inf if da == 1 else confini[da - 1]
+    alta = np.inf if a == n_fasce else confini[a]
+    return bassa, alta
 
 
 def valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5):
@@ -59,10 +75,7 @@ def valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5):
 
     p_te = modello.predict_proba(X.loc[idx_test])[:, 1]
     p_oo = modello.predict_proba(X.loc[idx_oos])[:, 1]
-
-    confini = np.quantile(p_te, np.linspace(0, 1, n_fasce + 1))
-    soglia_bassa = -np.inf if da == 1 else confini[da - 1]
-    soglia_alta = np.inf if a == n_fasce else confini[a]
+    soglia_bassa, soglia_alta = soglia_dal_test(modello, X, idx_test, fasce, n_fasce)
 
     def seleziona(p):
         return (p >= soglia_bassa) & (p < soglia_alta)
@@ -84,4 +97,4 @@ def valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5):
         righe.append(_riga(f"{nome} {etichetta}", p, yy, bp, seleziona(p), len(p)))
         righe.append(_riga(f"{nome} tutti", p, yy, bp, tutti, len(p)))
     return pd.DataFrame(righe).set_index("").round(
-        {"presi_%": 1, "vincenti_%": 1, "bp_medi_lordi": 2})
+        {"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2})
