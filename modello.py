@@ -119,11 +119,17 @@ def valuta(modello, X, y, rend, idx_train, idx_test, n_fasce=5):
 
     t = pd.DataFrame({"p": p_te, "y": y_te.to_numpy(),
                       "bp": rend.loc[idx_test].to_numpy() * 1e4}, index=idx_test)
-    # rank 'first' -> fasce di uguale numerosita' anche con probabilita' identiche
-    t["fascia"] = pd.qcut(t["p"].rank(method="first"), n_fasce, labels=range(1, n_fasce + 1))
-
     righe = []
-    for f, g in t.groupby("fascia", observed=True):
+    distinti = len(np.unique(p_te))
+    if distinti < n_fasce:
+        # stessa protezione di oos.controlla_fasce: niente fasce con troppo pochi valori distinti
+        print(f"fasce del test non calcolate: le probabilità hanno {distinti} valori distinti, "
+              f"meno delle {n_fasce} fasce. Si mostra solo «tutti».")
+        t["fascia"] = "tutti"
+    else:
+        # rank 'first' -> fasce di uguale numerosita' anche con probabilita' identiche
+        t["fascia"] = pd.qcut(t["p"].rank(method="first"), n_fasce, labels=range(1, n_fasce + 1))
+    for f, g in (t.groupby("fascia", observed=True) if distinti >= n_fasce else []):
         righe.append({"fascia": str(f), "prob_da": g.p.min(), "prob_a": g.p.max(),
                       "trade": len(g), "vincenti_%": 100 * g.y.mean(),
                       "bp_medi_netti": g.bp.mean()})

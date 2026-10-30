@@ -1,8 +1,12 @@
 # 00 · Stato (aggiornato al 30/10/2026)
 
-**Incarico in corso:** **lavoro D** (feature selection, con le sonde) di `docs/02_PROPOSTA_CONVERSIONE.md`,
-§D e §F: codice sul ramo `lavoro-d-selezione`, in revisione (chiusura e punto aperto in docs/02 §I).
-Fatti: lavoro A (PR #1), lavoro B (PR #2), lavoro C (PR #3, catalogo delle feature; decisioni in docs/02 §H).
+**Incarico in corso:** nessuno.
+
+**Fatti** (`docs/02_PROPOSTA_CONVERSIONE.md`):
+- lavoro A, pulizia e collegamento a V4 (PR #1);
+- lavoro B, pipeline base crypto (PR #2);
+- lavoro C, catalogo delle feature di contesto (PR #3, decisioni in §H);
+- lavoro D, feature selection con le sonde, regola B (PR #4, decisioni in §F e §I).
 
 ## Com'è il repo oggi
 Una prima bozza fatta su EURUSD M15 con una copia del vecchio motore (V3).

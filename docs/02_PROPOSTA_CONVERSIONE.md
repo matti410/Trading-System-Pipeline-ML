@@ -413,7 +413,43 @@ E10_SHORT_HANGING_MAN H 32):
 | LONG | 86 | 106 + 10 sonde | 0 | 57 | 17 | 32 | 0 | 20 s |
 | SHORT | 55 | 106 + 10 sonde | 0 | 58 | 13 | 35 | 0 | 13 s |
 
-**Punto aperto (da decidere, non deciso):** se la selezione non tiene nessuna feature, il modello con la
-selezione ha solo l'identità del trigger. Con un trigger solo per lato questa colonna è costante, quindi il
-modello dà a tutti la stessa probabilità. La «fascia 5» prende allora il 100% dei trigger del test e dell'OOS,
-e i passi 8 e 9 coincidono con «tutti i trigger». Oggi la procedura lo lascia accadere e lo stampa.
+**Il caso «nessuna feature tenuta».** Se la selezione non tiene nessuna feature, il modello con la selezione
+ha solo l'identità del trigger. Con un trigger solo per lato questa colonna è costante, quindi il modello dà a
+tutti la stessa probabilità. Senza protezione, la «fascia 5» prendeva il 100% dei trigger.
+
+**Decisione di Mattia (30/10/2026).** La regola di selezione non cambia.
+1. Se la selezione di un lato tiene 0 feature, il notebook lo scrive in chiaro («LONG: la selezione non ha
+   tenuto nessuna feature, il modello non distingue i trigger»). Per quel lato i passi 8 e 9 mostrano solo
+   «tutti i trigger», senza fasce né soglia. Il COMBINATO «modello» del backtest si mostra solo se tutti i
+   lati hanno il modello.
+2. Protezione generale (`oos.controlla_fasce`, usata da soglia, OOS, confronti e backtest, e la stessa regola
+   nelle fasce del test di `modello.valuta`): se le probabilità del test hanno meno valori distinti di
+   n_fasce, le fasce non si calcolano e si stampa il motivo.
+
+**Test di potenza (caratteristica dello strumento, non un passo della pipeline).** `tests/test_potenza.py`,
+gradini e semi fissati prima di guardare i risultati.
+- Dataset inventati come quelli del §F: 5.000 trigger, 1 feature vera e 20 di rumore.
+- Forza = coefficiente della vera (normale standard) nella probabilità del target,
+  P(y = 1) = 1 / (1 + e^(−forza · vera)).
+- 3 semi per gradino. «AUC» = l'AUC che la sola feature vera dà sui blocchi di validazione (media dei 4 giri).
+
+| forza | vera tenuta | AUC della vera da sola | colonne di rumore passate (sui 3 semi) |
+|---|---|---|---|
+| 0,50 | 3 su 3 | 0,639 | 0 |
+| 0,30 | 3 su 3 | 0,580 | 1 |
+| 0,20 | 2 su 3 | 0,556 | 0 |
+| 0,15 | 3 su 3 | 0,545 | 1 |
+| 0,10 | 1 su 3 | 0,515 | 1 |
+| 0,07 | 0 su 3 | 0,517 | 1 |
+| 0,05 | 0 su 3 | 0,515 | 3 |
+| 0,03 | 0 su 3 | 0,508 | 1 |
+| 0 | 0 su 3 | 0,494 | 0 |
+
+**Soglia dello strumento.** Su questi dataset la procedura vede la feature vera quasi sempre quando, da sola,
+dà un'AUC di circa **0,545 o più** (forza 0,15). La vede una volta su tre intorno a 0,515 (forza 0,10). Non
+la vede più sotto (forza 0,07 e meno, AUC circa 0,52 o meno).
+
+**Rumore che passa.** Con la feature vera debole o assente, a volte passa una colonna di rumore: 8 volte in 27
+dataset. Negli 8 casi del §F (forza 1, feature vera forte) non era successo. Conferma che la regola B è un
+controllo, non una garanzia: la probabilità che il rumore passi è piccola, non zero, ed è più alta quando nelle
+candidate non c'è niente di forte.
