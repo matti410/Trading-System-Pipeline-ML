@@ -29,7 +29,7 @@ SHORT. Solo crypto da exchange, come V4.
   e dei filtri, event study, confine dell'in-sample.
 - **Target = regola d'uscita del backtest.**
   - Ingresso all'Open della barra dopo il trigger.
-  - Uscita al Close a H barre dal trigger. Niente SL/TP.
+  - Uscita all'Open della barra i+H+1, come il motore veloce di V4 (stessa durata: H barre). Niente SL/TP.
   - TARGET = 1 se il guadagno netto supera i costi del Lab (stessa funzione di V4).
   - H è uno per lato: `H_LONG` e `H_SHORT`.
 - **Nessun lookahead.** Ogni feature usa solo barre chiuse fino al trigger. Ogni feature

@@ -1,8 +1,8 @@
 # 00 · Stato (aggiornato al 30/10/2026)
 
-**Incarico in corso:** **lavoro A** (pulizia e collegamento a V4) di `docs/02_PROPOSTA_CONVERSIONE.md`,
-sul ramo `conversione-crypto`, nella PR #1. Le decisioni di Mattia sulla proposta sono in docs/02 §F.
-B, C e D vengono dopo, ognuno con il suo via.
+**Incarico in corso:** **lavoro B** (pipeline base crypto) di `docs/02_PROPOSTA_CONVERSIONE.md`, §B e §F.
+Il lavoro A (pulizia e collegamento a V4) è fatto: PR #1, ramo `conversione-crypto`. C e D vengono dopo,
+ognuno con il suo via.
 
 ## Com'è il repo oggi
 Una prima bozza fatta su EURUSD M15 con una copia del vecchio motore (V3).
