@@ -5,8 +5,8 @@ Modulo ADDITIVO (29/9/2026): non modifica nessun file esistente.
 
 Funzioni:
 
-  rendimenti_trigger(df_lato, indice, direction, horizon=25)
-      -> Series: guadagno di ogni trigger, STESSA formula del target
+  rendimenti_trigger(target)
+      -> Series: guadagno NETTO di ogni trigger (frazione), dal target
 
   addestra(X, y, idx_train, idx_test)
       -> modello LightGBM addestrato solo sulle righe di train
@@ -42,20 +42,14 @@ PARAMETRI_BASE = dict(
 )
 
 
-def rendimenti_trigger(df_lato, indice, direction, horizon=25):
+def rendimenti_trigger(target):
     """
-    Guadagno (frazione, nel verso del trade) di ogni trigger in `indice`:
-    ingresso Open della barra successiva, uscita Close a `horizon` barre
-    dal trigger. Stessa formula di target.costruisci_target, cosi'
-    (rend > costo_pips * pip_size / prezzo_ingresso) riproduce il target,
-    salvo i pareggi esatti (guadagno = costo), che il target conta come 0.
+    Guadagno NETTO di ogni trigger, in frazione del prezzo d'ingresso, preso
+    dal target (30/10/2026): la colonna netto_bp di target.costruisci_target,
+    con i costi del Lab (commissione, spread di un passo, funding). Cosi'
+    rend > 0 coincide con TARGET = 1 per costruzione.
     """
-    pos = df_lato.index.get_indexer(indice)
-    if (pos < 0).any() or (pos + horizon >= len(df_lato)).any():
-        raise ValueError("indice con trigger assenti o senza horizon barre in avanti")
-    entrata = df_lato["Open"].to_numpy()[pos + 1]
-    uscita = df_lato["Close"].to_numpy()[pos + horizon]
-    return pd.Series((uscita / entrata - 1.0) * direction, index=indice, name="rend")
+    return (target["netto_bp"] / 1e4).rename("rend")
 
 
 def _controlla_split(idx_train, idx_test):

@@ -4,11 +4,12 @@ interruttore dopo il modello di base).
 
 Modulo ADDITIVO: non modifica nessun file esistente.
 
-  pesi_unicita(indice, df_lato, horizon=25) -> Series di pesi, media 1
+  pesi_unicita(indice, df_lato, horizon) -> Series di pesi, media 1
 
 IDEA
 ----
-L'esito di un trigger si decide sulle `horizon` barre successive. Se piu'
+L'esito di un trigger si decide sulle `horizon` barre successive (dall'Open
+della barra dopo il trigger all'Open di quella a horizon + 1, target.py). Se piu'
 trigger scattano vicini, le loro finestre si sovrappongono e i loro esiti
 sono quasi lo stesso esito ripetuto. Il peso dice al modello quanto contare
 ogni riga:
@@ -26,13 +27,14 @@ import numpy as np
 import pandas as pd
 
 
-def pesi_unicita(indice, df_lato, horizon=25):
+def pesi_unicita(indice, df_lato, horizon):
     pos = df_lato.index.get_indexer(indice)
     n = len(df_lato)
-    if (pos < 0).any() or (pos + horizon >= n).any():
+    if (pos < 0).any() or (pos + horizon + 1 >= n).any():
         raise ValueError("indice con trigger assenti o senza horizon barre in avanti")
 
-    # finestra di ogni trigger: barre pos+1 ... pos+horizon (come il target)
+    # finestra di ogni trigger: barre pos+1 ... pos+horizon, i rendimenti da Open a
+    # Open fra l'ingresso e l'uscita del target
     conteggio = np.zeros(n + 1)
     np.add.at(conteggio, pos + 1, 1)
     np.add.at(conteggio, pos + horizon + 1, -1)

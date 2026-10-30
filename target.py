@@ -1,74 +1,106 @@
+"""
+Il target del meta-labeling: la regola d'uscita del backtest del Lab (30/10/2026, docs/02 §A e §F).
+
+  trade_dei_trigger(df, colonne_trigger, direction, horizon, *, costi, quarantena=True)
+      -> DataFrame nel formato dei trade del Lab (Size, EntryBar, ExitBar, ...)
+  costruisci_target(df, colonne_trigger, direction, horizon, *, costi, quarantena=True)
+      -> DataFrame: TARGET (0/1), lordo_bp, netto_bp, ingresso, uscita
+
+LA REGOLA (decisione di Mattia del 30/10/2026, D5)
+--------------------------------------------------
+E' quella del motore veloce di V4 con uscita a tempo n_barre = H:
+  - trigger sulla barra s;
+  - ingresso all'Open della barra s+1 (con lo spread del motore dentro il
+    prezzo, che sugli exchange e' 0: lo spread di un passo e' un costo a parte);
+  - il motore chiede la chiusura alla barra s+H, che si riempie all'Open della
+    barra s+H+1. Durata: ExitBar - EntryBar = H barre.
+Cosi' target = backtest = Lab, senza tolleranze (test di identita' esatta).
+
+Esclusi, come nel motore: il trigger sulla barra 0 (il motore non la guarda),
+quelli senza la barra s+H+1 (trade ancora aperto alla fine) e quelli in
+quarantena (quarantena_trade.maschera_segnali_puliti: barra del segnale o
+d'ingresso in quarantena).
+
+I COSTI: la stessa catena del Lab (engine/exit_search_bt.py), nello stesso ordine
+  costo_extra_pips -> aggiungi_funding -> aggiungi_spread_passo ->
+  metriche.netti_in_unita(..., unita="bp")
+con commissione taker per lato, spread di un passo e, sui perpetual, il
+funding di ogni liquidazione fra ingresso e uscita. TARGET = 1 se il netto in
+bp e' sopra zero; il pareggio esatto vale 0.
+
+A differenza del backtest, qui ogni trigger ha il suo trade anche se si
+sovrappone a un altro: l'etichetta e' del trigger. Il motore, che tiene un
+trade alla volta, prende un sottoinsieme di questi, con gli stessi numeri.
+"""
 import numpy as np
 import pandas as pd
 
 
-def costruisci_target(df_lato, colonne_trigger, direction, horizon=25, *, costo_pips, pip_size):
+def _posizioni_trigger(df, colonne_trigger, horizon, quarantena):
+    from engine.quarantena_trade import maschera_segnali_puliti
+    if horizon < 1:
+        raise ValueError("horizon deve essere >= 1")
+    mancanti = [c for c in colonne_trigger if c not in df.columns]
+    if mancanti:
+        raise KeyError(f"colonne trigger non presenti nel df: {mancanti}")
+    segnale = df[list(colonne_trigger)].astype(bool).any(axis=1).to_numpy() & maschera_segnali_puliti(df, quarantena)
+    pos = np.flatnonzero(segnale)
+    n = len(df)
+    return pos[(pos >= 1) & (pos + horizon + 1 < n)]
+
+
+def trade_dei_trigger(df, colonne_trigger, direction, horizon, *, costi, quarantena=True):
     """
-    Costruisce il target binario (meta-labeling) per un lato (LONG o SHORT).
-
-    Per ogni barra in cui scatta almeno uno dei trigger indicati, calcola il
-    rendimento realizzato tra l'ingresso (Open della barra successiva al
-    trigger) e l'uscita (Close a `horizon` barre di distanza dalla barra di
-    trigger, stesso riferimento usato nell'event study), nel verso di
-    `direction`. TARGET=1 se il rendimento supera il costo del trade, 0
-    altrimenti.
-
-    Il costo e' in pips (spread + commissione, da costi_symbol.costi) e viene
-    convertito in rendimento trigger per trigger, sul prezzo di ingresso:
-        soglia = costo_pips * pip_size / prezzo_ingresso
-    Le barre MT5 sono in prezzo bid: un long compra all'ask ed esce al bid,
-    uno short vende al bid e ricompra all'ask, quindi lo spread si paga una
-    volta per trade in entrambi i versi.
-
-    Nessun margine di embargo IS/OOS viene applicato qui: va fatto a parte,
-    quando si costruisce lo split, scartando le righe vicino al confine.
-
-    Parametri
-    ---------
-    df_lato : DataFrame con colonne 'Open', 'Close', le colonne trigger e le
-        feature di contesto (es. df_LONG o df_SHORT). Indice temporale
-        ordinato, senza gap, come prodotto dal notebook.
-    colonne_trigger : lista di nomi colonna booleani (i 4 flag E* del lato).
-    direction : 1 per LONG, -1 per SHORT.
-    horizon : barre dopo il trigger su cui misurare l'uscita (default 25).
-    costo_pips : costo andata e ritorno in pips (spread + commissione).
-        Obbligatorio, da passare per nome: COSTI["costo_pips"].
-    pip_size : valore di 1 pip in unita' di prezzo. Obbligatorio, da passare
-        per nome: COSTI["pip_size"].
-
-    Ritorna
-    -------
-    pd.Series di 0/1 (int), indicizzata solo sulle barre trigger che hanno
-    `horizon` barre complete disponibili in avanti. name='TARGET'.
+    Un trade per trigger, con le colonne dei trade del motore (stessi tipi), e
+    il costo del Lab gia' aggiunto (CostoExtraPips e, sui perpetual, FundingPips).
+    L'indice e' la barra del trigger.
     """
+    from engine.exchange import aggiungi_funding, aggiungi_spread_passo
+    from engine.quarantena_trade import costo_extra_pips
+
     if direction not in (1, -1):
         raise ValueError("direction deve essere 1 (LONG) o -1 (SHORT)")
+    pos = _posizioni_trigger(df, colonne_trigger, int(horizon), quarantena)
+    entrata, uscita = pos + 1, pos + int(horizon) + 1
+    apertura = df["Open"].to_numpy(np.float64)
+    spread = float(costi.get("spread", 0.0))
+    idx = df.index
+    trades = pd.DataFrame({
+        "Size": [float(direction)] * len(pos),
+        "EntryBar": entrata.tolist(),
+        "ExitBar": uscita.tolist(),
+        # come il motore: o[i] * (1 + copysign(spread, entra)); spread 0 sugli exchange
+        "EntryPrice": (apertura[entrata] * (1 + np.copysign(spread, direction))).tolist(),
+        "ExitPrice": apertura[uscita].tolist(),
+        "EntryTime": [idx[i] for i in entrata],
+        "ExitTime": [idx[i] for i in uscita],
+    }, index=idx[pos])
+    pip = float(costi["pip_size"])
+    trades = costo_extra_pips(trades, df, quarantena, spread, costi.get("spread_rollover_pips"), pip)
+    trades = aggiungi_funding(trades, df, costi.get("funding"), pip)
+    trades = aggiungi_spread_passo(trades, costi.get("spread_passo_pips"))
+    return trades
 
-    is_trigger = df_lato[colonne_trigger].any(axis=1)
-    trigger_idx = df_lato.index[is_trigger]
 
-    n = len(df_lato)
-    pos = df_lato.index.get_indexer(trigger_idx)  # posizione intera di ogni riga trigger
+def costruisci_target(df, colonne_trigger, direction, horizon, *, costi, quarantena=True):
+    """
+    Il target di un lato. Parametri:
 
-    entry_pos = pos + 1        # barra successiva al trigger
-    exit_pos = pos + horizon   # barra a `horizon` dal trigger
+    df              le barre del dataset (dataset.apri(...).df), con le colonne trigger
+    colonne_trigger i trigger del lato scelti da Mattia (colonne bool)
+    direction       1 = LONG, -1 = SHORT
+    horizon         H del lato, in barre (obbligatorio)
+    costi           il dizionario dei costi del Lab (dataset.apri(...).costi)
+    quarantena      come nel Lab: True = trigger in quarantena scartati
 
-    valido = exit_pos < n      # scarta le righe senza storia futura sufficiente
-
-    open_arr = df_lato['Open'].to_numpy()
-    close_arr = df_lato['Close'].to_numpy()
-
-    entry_price = open_arr[entry_pos[valido]]
-    exit_price = close_arr[exit_pos[valido]]
-
-    # guadagno > costo, cioe' (exit/entry - 1)*direction > costo_pips*pip_size/entry.
-    # Il confronto si fa in unita' di prezzo (moltiplicando per entry), che e'
-    # la stessa disuguaglianza senza la divisione: i prezzi hanno pochi
-    # decimali e un guadagno pari al costo (es. esattamente 8 punti = 0.8 pips)
-    # capita spesso; con la divisione finiva a caso in 0 o 1 per
-    # arrotondamento. Pareggio esatto -> 0 (il trade non supera il costo).
-    # Tolleranza relativa al prezzo -> vale per qualunque symbol (anche BTCUSD).
-    netto = (exit_price - entry_price) * direction - costo_pips * pip_size
-    target = (netto > 1e-9 * entry_price).astype(int)
-
-    return pd.Series(target, index=trigger_idx[valido], name='TARGET')
+    Ritorna un DataFrame indicizzato sulla barra del trigger, con TARGET (0/1),
+    lordo_bp, netto_bp, ingresso e uscita (i prezzi del trade).
+    """
+    from engine.metriche import netti_in_unita
+    trades = trade_dei_trigger(df, colonne_trigger, direction, horizon, costi=costi, quarantena=quarantena)
+    lordi, netti = netti_in_unita(trades, float(costi["pip_size"]), float(costi["commission"]), "bp")
+    out = pd.DataFrame({"TARGET": (netti > 0).astype(int), "lordo_bp": lordi, "netto_bp": netti,
+                        "ingresso": trades["EntryPrice"], "uscita": trades["ExitPrice"]},
+                       index=trades.index)
+    out.index.name = df.index.name
+    return out
