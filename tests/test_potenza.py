@@ -14,6 +14,8 @@ from sklearn.metrics import roc_auc_score
 
 import selezione as S
 
+pytestmark = pytest.mark.lento          # circa 3,5 minuti: python -m pytest -q -m lento
+
 GRADINI = (0.50, 0.30, 0.20, 0.15, 0.10, 0.07, 0.05, 0.03, 0.00)
 SEMI = (0, 1, 2)
 N_TRIGGER = 5000

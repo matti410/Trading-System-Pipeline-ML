@@ -453,3 +453,15 @@ la vede più sotto (forza 0,07 e meno, AUC circa 0,52 o meno).
 dataset. Negli 8 casi del §F (forza 1, feature vera forte) non era successo. Conferma che la regola B è un
 controllo, non una garanzia: la probabilità che il rumore passi è piccola, non zero, ed è più alta quando nelle
 candidate non c'è niente di forte.
+
+**Perché il rumore passa (caratteristica nota).** I 4 giri ad allargamento **non sono indipendenti**.
+- Il fit di ogni giro contiene tutto il fit del giro prima (blocchi 1, 1–2, 1–3, 1–4). I quattro modelli sono
+  quindi allenati in gran parte sugli stessi trigger e tendono a fare gli stessi split.
+- Una colonna di rumore che per caso il modello usa nei primi blocchi tende a essere usata di nuovo nei giri
+  dopo, e a dare importanza sopra zero più volte.
+- «3 giri su 4 sopra la sonda migliore» non sono quindi tre prove indipendenti. La probabilità che il rumore
+  passi è più alta di quella che si avrebbe con giri indipendenti, circa 4 · (1/11)³ ≈ 0,3% per colonna.
+- L'effetto cresce quando nelle candidate non c'è niente di forte: gli alberi fanno più split sulle colonne
+  di rumore, e la loro importanza varia di più fra una colonna e l'altra.
+
+Non si corregge qui: è una caratteristica dello strumento, da tenere presente leggendo le feature tenute.

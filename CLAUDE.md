@@ -42,7 +42,7 @@ SHORT. Solo crypto da exchange, come V4.
   livello del prezzo. Le finestre si scrivono in ore e si convertono in barre in base al
   timeframe.
 - **Commit e PR.**
-  - Prima di ogni commit lancia tutti i test.
+  - Prima di ogni commit lancia tutti i test; il test lento (`-m lento`) solo se cambi selezione.py o modello.py.
   - Prima di ogni push controlla che la PR sia ancora aperta.
   - Il merge lo fa Mattia.
   - Le date si prendono dal sistema (`date`), non si inventano.
