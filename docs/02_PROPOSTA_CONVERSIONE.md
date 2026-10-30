@@ -302,3 +302,27 @@ scelte, accanto al modello base.
 8. **§A, collegamento**: avviso ben visibile se V4 non è sul ramo `main` o ha modifiche non committate.
 
 Il codice del lavoro A è stato collaudato su V4 al ramo `main`, commit `ab62755`.
+
+---
+
+## §G · Chiusura del lavoro B (30/10/2026)
+
+**Fatto come §B e §F.** Note su quello che il lavoro ha fissato:
+- **Event study sul train**: le barre di `df_is` prima di `split.barra_confine`, la stessa regola dello
+  split. Orizzonte: il più lungo della griglia del Lab (8 ore); la curva mostra quelli intermedi.
+- **X**: identità del trigger + l'elenco `dataset.filtri` (38 filtri, di cui 3 `VWAP_*`).
+- **Registro** (`registro.py`): una riga JSON aggiunta in fondo a
+  `DATI_DIR/registro_ml/<DATASET>/giornale_<macchina>.jsonl`, aperta in aggiunta come i giornali dello
+  studio di V4 (`studio.aggiungi_voce`), non con `scrivi_sicuro`, che riscrive il file intero. Si registrano
+  ogni addestramento e ogni sguardo all'OOS (tabella e backtest), con `collaudo` sì/no.
+- **Backtest** (`backtest_oos.py`): `MotoreVeloce` di V4 con `n_barre` = H del lato, `exclusive_orders`, un
+  trade alla volta per lato, costi con la catena del Lab. Il motore gira sullo storico intero con i
+  segnali accesi solo sulle barre del periodo. Unità: bp netti per trade, a capitale fisso.
+
+**Come si calcola il COMBINATO (LONG + SHORT).**
+- I due lati girano separati, ciascuno con il suo capitale: possono essere aperti insieme (esposizione
+  doppia, nessuna compensazione fra i due).
+- Il COMBINATO è l'unione dei trade dei due lati, in ordine di ora d'uscita.
+- Trade, vincenti, trade medio e profit factor si calcolano sui trade uniti; il totale è la somma dei bp.
+- La curva è la somma cumulata dei bp di tutti i trade; il max drawdown si misura su quella curva.
+- Esposizione: quota delle barre del periodo con almeno un lato aperto. Saltati: somma dei due lati.

@@ -3,12 +3,15 @@ Split train/test dentro df_is e matrice X per i modelli ML (LONG / SHORT).
 
 Modulo ADDITIVO (29/9/2026): non modifica nessun file esistente.
 
-Due funzioni:
+Tre funzioni:
+
+  barra_confine(df_is, quota=0.8) -> int
+      la posizione del confine train/test (la usa anche l'event study del train)
 
   split_train_test(target, df_is, horizon, quota=0.8)
       -> (idx_train, idx_test)
 
-  costruisci_X(df_lato, target, colonne_trigger)
+  costruisci_X(df_lato, target, colonne_trigger, colonne_contesto)
       -> DataFrame di feature 0/1, allineato al target
 
 PERCHE' SERVONO PURGE ED EMBARGO
@@ -31,12 +34,20 @@ stesso (o vengono tolti dal purge se sforano in OOS).
 Pesi di unicita' (decisione A del 28/9): NON sono qui. Si aggiungono in un
 secondo momento come interruttore separato, dopo un primo modello di base.
 """
-import re
-
 import pandas as pd
 
-_PATTERN_F = re.compile(r"^F\d+_")
 _OHLCV = {"Open", "High", "Low", "Close", "Volume", "spread"}
+
+
+def barra_confine(df_is: pd.DataFrame, quota: float = 0.8) -> int:
+    """
+    Posizione (in barre di df_is) della prima barra del test: le barre prima
+    sono il train. Unica regola per lo split e per l'event study del train
+    (pipeline.event_study_train), cosi' il confine e' lo stesso.
+    """
+    if not 0 < quota < 1:
+        raise ValueError("quota deve stare fra 0 e 1")
+    return round(len(df_is) * quota)
 
 
 def split_train_test(target, df_is: pd.DataFrame, horizon: int, quota: float = 0.8):
@@ -61,7 +72,7 @@ def split_train_test(target, df_is: pd.DataFrame, horizon: int, quota: float = 0
     """
     y = target["TARGET"] if isinstance(target, pd.DataFrame) else target
     n_is = len(df_is)
-    confine = round(n_is * quota)
+    confine = barra_confine(df_is, quota)
 
     pos = df_is.index.get_indexer(target.index)   # -1 = trigger fuori da df_is
     in_is = pos >= 0
@@ -95,18 +106,25 @@ def split_train_test(target, df_is: pd.DataFrame, horizon: int, quota: float = 0
     return idx_train, idx_test
 
 
-def costruisci_X(df_lato: pd.DataFrame, target: pd.Series,
-                 colonne_trigger: list) -> pd.DataFrame:
+def costruisci_X(df_lato: pd.DataFrame, target, colonne_trigger: list,
+                 colonne_contesto: list) -> pd.DataFrame:
     """
-    Matrice delle feature per un lato: le colonne trigger E* del lato +
-    tutte le colonne di contesto F*, convertite in 0/1, una riga per ogni
+    Matrice delle feature per un lato: le colonne trigger del lato (l'identita'
+    del trigger) + le colonne di contesto, convertite in 0/1, una riga per ogni
     riga del target (stesso indice, stesso ordine).
+
+    colonne_contesto : l'elenco dei filtri del Lab, dataset.apri(...).filtri
+        (F* e VWAP_*). Non si riconoscono dal nome: tre filtri del Lab non
+        cominciano con F (lavoro B, 30/10/2026).
 
     Mai colonne OHLCV: il modello vede solo "quale trigger" e "in che
     contesto", non il livello del prezzo.
     """
-    colonne_f = [c for c in df_lato.columns if _PATTERN_F.match(c)]
+    colonne_f = [c for c in colonne_contesto if c not in colonne_trigger]
     colonne = list(colonne_trigger) + colonne_f
+    mancanti = [c for c in colonne if c not in df_lato.columns]
+    if mancanti:
+        raise KeyError(f"colonne non presenti nel df: {mancanti}")
 
     vietate = _OHLCV.intersection(colonne)
     if vietate:
@@ -118,5 +136,5 @@ def costruisci_X(df_lato: pd.DataFrame, target: pd.Series,
 
     X = X.astype(int)
     print(f"X: {X.shape[0]} righe x {X.shape[1]} colonne "
-          f"({len(colonne_trigger)} trigger E* + {len(colonne_f)} contesto F*)")
+          f"({len(colonne_trigger)} trigger + {len(colonne_f)} filtri di contesto)")
     return X

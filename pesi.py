@@ -46,3 +46,20 @@ def pesi_unicita(indice, df_lato, horizon):
 
     peso = peso / peso.mean()
     return pd.Series(peso, index=indice, name="peso")
+
+
+def pesi_rendimento(netto_bp_train, quantile=0.95):
+    """
+    Peso per |rendimento| (D1, decisione di Mattia del 30/10/2026): min(|netto_bp|,
+    tetto), con il tetto = 95° percentile di |netto_bp| del SOLO train. Il tetto
+    tiene fuori i pochi trade estremi (crolli, notizie), che altrimenti
+    dominerebbero l'addestramento. Normalizzati a media 1, come i pesi di unicita'.
+
+    netto_bp_train : Series dei bp netti, gia' ristretta a idx_train.
+    """
+    assoluto = netto_bp_train.abs()
+    tetto = float(np.quantile(assoluto, quantile))
+    peso = np.minimum(assoluto, tetto)
+    if peso.sum() <= 0:
+        raise ValueError("pesi per rendimento tutti nulli")
+    return (peso / peso.mean()).rename("peso")

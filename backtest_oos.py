@@ -1,40 +1,42 @@
 """
-Backtest (VectorBT) dei trigger selezionati dal modello nel periodo OOS.
-
-Modulo ADDITIVO (29/9/2026): non modifica nessun file esistente.
+Backtest OOS dei trigger selezionati dal modello, sul motore veloce di V4 (D5, 30/10/2026).
 
   trigger_in_fascia(modello, X, idx_test, idx_oos, fasce=5, n_fasce=5)
       -> trigger OOS con probabilita' nella fascia operativa (soglia dal test)
-  un_trade_alla_volta(idx, df_periodo, horizon=25)
-      -> (trigger tenuti, n. saltati)
-  esegui_backtest(df_periodo, trigger_long, trigger_short, horizon=25, *,
-                  unita, capitale, costo_pips, pip_size)
-      -> dict con i portafogli LONG, SHORT, COMBINATO e i trigger saltati
+  trade_motore(df, segnali, direction, horizon, costi)
+      -> DataFrame dei trade del motore, con lordo_bp, netto_bp e la barra del trigger
+  esegui_backtest(df, segnali_long, segnali_short, H_long, H_short, costi)
+      -> dict con i trade LONG, SHORT, COMBINATO e i segnali saltati
   tabella_metriche({"nome": risultato, ...}) -> DataFrame
-  grafico_equity({"nome": risultato, ...}, capitale)
+  grafico_equity({"nome": risultato, ...})
 
-REGOLE (decisioni del 29/9) - le stesse del target:
-  - ingresso all'Open della barra successiva al trigger
-  - uscita al Close a `horizon` barre dal trigger, niente SL/TP
-  - un trade alla volta PER LATO: un trigger che scatta mentre un trade
-    dello stesso lato e' aperto viene saltato (e contato)
-  - lotto fisso (`unita` = COSTI["lotto"], 1 lotto del symbol), nessun
-    reinvestimento: il money management e' uno step successivo
-  - costo (dal 29/9, conto Standard): importo FISSO per trade, in valuta di
-    quotazione = costo_pips * pip_size * unita, meta' in ingresso e meta' in
-    uscita (EURUSD, 1 lotto, 0.8 pips -> 8 USD a trade). Valori da
-    costi_symbol.costi(symbol).
+REGOLE: le stesse del Lab e del target
+  - MotoreVeloce di V4 (engine/motore_veloce.py), exclusive_orders=True: un
+    trade alla volta PER LATO. Un segnale che arriva con un trade dello stesso
+    lato aperto si salta (e si conta);
+  - uscita a tempo n_barre = H del lato: ingresso all'Open dopo il trigger,
+    uscita all'Open della barra trigger + H + 1, niente SL/TP;
+  - costi con la stessa catena del Lab: costo_extra_pips -> aggiungi_funding ->
+    aggiungi_spread_passo -> netti_in_unita(..., "bp").
+Il motore gira sullo storico intero (cosi' funding, quarantena e posizioni
+delle barre sono quelle del target) con i segnali accesi SOLO sulle barre
+passate: nessun trade fuori dal periodo dei segnali.
 
-VectorBT open-source NON gestisce il margine: `capitale` deve coprire il
-controvalore della posizione. Se non basta, il backtest si ferma con un
-errore invece di ridurre la size in silenzio.
+UNITA': bp per trade, a capitale fisso (nessun reinvestimento). La curva e' la
+somma dei bp netti dei trade, in ordine di uscita.
+
+COMBINATO (LONG + SHORT): i due lati girano separati, ciascuno con il suo
+capitale, e possono essere aperti insieme (esposizione doppia, nessuna
+compensazione). Il COMBINATO e' l'unione dei trade dei due lati, ordinata per
+ora d'uscita: trade, vincenti, trade medio e profit factor sui trade uniti;
+curva = somma cumulata dei bp di tutti i trade; max drawdown su quella curva;
+esposizione = quota di barre con almeno un lato aperto.
 """
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import vectorbt as vbt
 
-from oos import _intervallo
+from oos import soglia_dal_test
 
 COLORE_MODELLO = "#2a78d6"
 COLORE_TUTTI = "#8a8a85"
@@ -42,119 +44,126 @@ COLORE_TUTTI = "#8a8a85"
 
 def trigger_in_fascia(modello, X, idx_test, idx_oos, fasce=5, n_fasce=5):
     """Stessa soglia di oos.valuta_oos: quantili delle probabilita' del test."""
-    da, a = _intervallo(fasce, n_fasce)
-    p_te = modello.predict_proba(X.loc[idx_test])[:, 1]
+    bassa, alta = soglia_dal_test(modello, X, idx_test, fasce, n_fasce)
     p_oo = modello.predict_proba(X.loc[idx_oos])[:, 1]
-    confini = np.quantile(p_te, np.linspace(0, 1, n_fasce + 1))
-    bassa = -np.inf if da == 1 else confini[da - 1]
-    alta = np.inf if a == n_fasce else confini[a]
     return idx_oos[(p_oo >= bassa) & (p_oo < alta)]
 
 
-def un_trade_alla_volta(idx, df_periodo, horizon=25):
+def trade_motore(df, segnali, direction, horizon, costi, quarantena=True):
     """
-    Tiene un trigger solo se il trade precedente dello stesso lato e' gia'
-    chiuso: nuovo ingresso (pos+1) dopo la barra d'uscita precedente
-    (pos_prec + horizon).
+    I trade del motore veloce di V4 per un lato, con i costi del Lab. `segnali`
+    sono le barre dei trigger da tradare (gia' pulite dalla quarantena: vengono
+    dal target). Colonne in piu': trigger (la barra del segnale), lordo_bp, netto_bp.
     """
-    pos = df_periodo.index.get_indexer(idx)
-    if (pos < 0).any() or (pos + horizon >= len(df_periodo)).any():
-        raise ValueError("trigger fuori dal periodo o senza horizon barre in avanti")
-    tenuti, ultima_uscita = [], -1
-    for p in np.sort(pos):
-        if p + 1 > ultima_uscita:
-            tenuti.append(p)
-            ultima_uscita = p + horizon
-    return df_periodo.index[tenuti], len(pos) - len(tenuti)
+    from engine.exchange import aggiungi_funding, aggiungi_spread_passo
+    from engine.metriche import netti_in_unita
+    from engine.motore_veloce import MotoreVeloce
+    from engine.quarantena_trade import costo_extra_pips
+
+    if direction not in (1, -1):
+        raise ValueError("direction deve essere 1 (LONG) o -1 (SHORT)")
+    df_bt = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+    acceso = df.index.isin(pd.DatetimeIndex(segnali))
+    if acceso.sum() != len(pd.DatetimeIndex(segnali).unique()):
+        raise ValueError("segnali con barre che non sono nel df")
+    df_bt["segnale"] = acceso
+    for col in ("sl_long", "tp_long", "sl_short", "tp_short"):
+        df_bt[col] = np.nan
+    lato = {"long_col": "segnale"} if direction == 1 else {"short_col": "segnale"}
+    stats = MotoreVeloce(df_bt, cash=costi.get("cash", 10_000_000), spread=costi["spread"],
+                         commission=costi["commission"], exclusive_orders=True).run(n_barre=int(horizon), **lato)
+    pip = float(costi["pip_size"])
+    tr = costo_extra_pips(stats["_trades"], df, quarantena, costi["spread"], costi.get("spread_rollover_pips"), pip)
+    tr = aggiungi_funding(tr, df, costi.get("funding"), pip)
+    tr = aggiungi_spread_passo(tr, costi.get("spread_passo_pips"))
+    lordi, netti = netti_in_unita(tr, pip, float(costi["commission"]), "bp")
+    tr = tr.assign(trigger=df.index[tr["EntryBar"].to_numpy(dtype=int) - 1], lordo_bp=lordi, netto_bp=netti,
+                   lato="LONG" if direction == 1 else "SHORT")
+    return tr
 
 
-def _ordini(df_periodo, trigger, direction, horizon, unita):
-    n = len(df_periodo)
-    size = np.full(n, np.nan)
-    prezzo = np.full(n, np.nan)
-    pos = df_periodo.index.get_indexer(trigger)
-    size[pos + 1] = unita * direction
-    prezzo[pos + 1] = df_periodo["Open"].to_numpy()[pos + 1]
-    size[pos + horizon] = -unita * direction
-    prezzo[pos + horizon] = df_periodo["Close"].to_numpy()[pos + horizon]
-    return size, prezzo
+def esegui_backtest(df, segnali_long, segnali_short, H_long, H_short, costi):
+    """
+    LONG e SHORT separati (un trade alla volta per lato) e il COMBINATO (vedi
+    sopra). Un lato senza segnali (None, es. lo short sullo spot) resta vuoto.
+    """
+    out = {"trade": {}, "saltati": {}, "barre": len(df)}
+    for nome, segnali, direction, H in (("LONG", segnali_long, 1, H_long), ("SHORT", segnali_short, -1, H_short)):
+        if segnali is None or len(segnali) == 0:
+            out["trade"][nome] = pd.DataFrame(columns=["EntryBar", "ExitBar", "ExitTime", "netto_bp", "lordo_bp"])
+            out["saltati"][nome] = 0
+            continue
+        tr = trade_motore(df, segnali, direction, H, costi)
+        out["trade"][nome] = tr
+        out["saltati"][nome] = int(len(pd.DatetimeIndex(segnali).unique()) - len(tr))
+    lati = [t for t in out["trade"].values() if len(t)]
+    out["trade"]["COMBINATO"] = (pd.concat(lati).sort_values(["ExitTime", "EntryBar"]).reset_index(drop=True)
+                                 if lati else out["trade"]["LONG"])
+    out["saltati"]["COMBINATO"] = out["saltati"]["LONG"] + out["saltati"]["SHORT"]
+    return out
 
 
-def _portafoglio(df_periodo, size, prezzo, capitale, costo_ordine, raggruppa=False):
-    return vbt.Portfolio.from_orders(
-        close=df_periodo["Close"] if size.ndim == 1 else
-        pd.concat([df_periodo["Close"]] * size.shape[1], axis=1, keys=["LONG", "SHORT"]),
-        size=size, price=prezzo, size_type="amount", direction="both",
-        fixed_fees=costo_ordine, init_cash=capitale,
-        cash_sharing=raggruppa, group_by=True if raggruppa else None,
-        allow_partial=False, raise_reject=True, freq="15min",
-    )
+def _esposizione(trades, inizio, fine):
+    """Quota delle barre [inizio, fine) con almeno un trade aperto (ingresso compreso, uscita esclusa)."""
+    if fine <= inizio or len(trades) == 0:
+        return 0.0
+    aperto = np.zeros(fine - inizio + 1, dtype=int)
+    eb = np.clip(trades["EntryBar"].to_numpy(dtype=int) - inizio, 0, fine - inizio)
+    xb = np.clip(trades["ExitBar"].to_numpy(dtype=int) - inizio, 0, fine - inizio)
+    np.add.at(aperto, eb, 1)
+    np.add.at(aperto, xb, -1)
+    return float((np.cumsum(aperto)[:-1] > 0).mean())
 
 
-def esegui_backtest(df_periodo, trigger_long, trigger_short, horizon=25, *,
-                    unita, capitale, costo_pips, pip_size):
-    costo_ordine = costo_pips * pip_size * unita / 2   # meta' in ingresso, meta' in uscita
-    tl, saltati_l = un_trade_alla_volta(trigger_long, df_periodo, horizon)
-    ts, saltati_s = un_trade_alla_volta(trigger_short, df_periodo, horizon)
-    sl, pl = _ordini(df_periodo, tl, 1, horizon, unita)
-    ss, ps = _ordini(df_periodo, ts, -1, horizon, unita)
+def _metriche(trades, saltati, inizio, fine):
+    bp = trades["netto_bp"].astype(float).to_numpy() if len(trades) else np.array([])
+    curva = np.cumsum(bp)
+    picchi = np.maximum.accumulate(np.r_[0.0, curva])[1:] if len(bp) else np.array([])
+    perdite = -bp[bp < 0].sum()
     return {
-        "LONG": _portafoglio(df_periodo, sl, pl, capitale, costo_ordine),
-        "SHORT": _portafoglio(df_periodo, ss, ps, capitale, costo_ordine),
-        "COMBINATO": _portafoglio(df_periodo, np.column_stack([sl, ss]),
-                                  np.column_stack([pl, ps]), capitale, costo_ordine,
-                                  raggruppa=True),
-        "saltati": {"LONG": saltati_l, "SHORT": saltati_s,
-                    "COMBINATO": saltati_l + saltati_s},
-        "trigger": {"LONG": tl, "SHORT": ts},
-    }
-
-
-def _metriche(pf, saltati):
-    t = pf.trades.records_readable
-    pnl, ret = t["PnL"], t["Return"]
-    perdite = -pnl[pnl < 0].sum()
-    in_pos = (pf.asset_value(group_by=False) != 0)
-    in_pos = in_pos.any(axis=1) if in_pos.ndim == 2 else in_pos
-    return {
-        "trade": len(t),
+        "trade": len(bp),
         "saltati": saltati,
-        "vincenti_%": 100 * (pnl > 0).mean(),
-        "trade_medio_bp": 1e4 * ret.mean(),
-        "profit_factor": pnl[pnl > 0].sum() / perdite if perdite > 0 else np.inf,
-        "pnl_totale": pnl.sum(),
-        "rendimento_%": 100 * pf.total_return(),
-        "max_dd_%": 100 * pf.max_drawdown(),
-        "sharpe": pf.sharpe_ratio(),
-        "esposizione_%": 100 * in_pos.mean(),
+        "vincenti_%": 100 * (bp > 0).mean() if len(bp) else np.nan,
+        "trade_medio_bp": bp.mean() if len(bp) else np.nan,
+        "profit_factor": bp[bp > 0].sum() / perdite if perdite > 0 else np.inf,
+        "totale_bp": curva[-1] if len(bp) else 0.0,
+        "max_dd_bp": float((picchi - curva).max()) if len(bp) else 0.0,
+        "esposizione_%": 100 * _esposizione(trades, inizio, fine),
     }
 
 
-def tabella_metriche(risultati):
+def tabella_metriche(risultati, inizio_bar, fine_bar):
+    """
+    Una riga per lato e scenario. inizio_bar / fine_bar: posizioni nel df del
+    periodo (per l'esposizione), es. la prima barra OOS e len(df).
+    """
     righe = {}
     for nome, r in risultati.items():
         for lato in ("LONG", "SHORT", "COMBINATO"):
-            righe[(lato, nome)] = _metriche(r[lato], r["saltati"][lato])
+            righe[(lato, nome)] = _metriche(r["trade"][lato], r["saltati"][lato], inizio_bar, fine_bar)
     tab = pd.DataFrame(righe).T
     tab.index.names = ["lato", "scenario"]
     return tab.astype(float).round(2)
 
 
-def grafico_equity(risultati, capitale):
+def grafico_equity(risultati):
     colori = [COLORE_MODELLO, COLORE_TUTTI]
     fig, assi = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
     for ax, lato in zip(assi, ("LONG", "SHORT", "COMBINATO")):
         for (nome, r), colore in zip(risultati.items(), colori):
-            ax.plot(r[lato].value(), color=colore, lw=2 if colore == COLORE_MODELLO else 1.5,
-                    label=nome)
-        ax.axhline(capitale, color="#b5b5b0", lw=1, ls=":")
+            t = r["trade"][lato]
+            if len(t):
+                ax.plot(pd.DatetimeIndex(t["ExitTime"]), t["netto_bp"].astype(float).cumsum(), color=colore,
+                        lw=2 if colore == COLORE_MODELLO else 1.5, label=nome)
+        ax.axhline(0, color="#b5b5b0", lw=1, ls=":")
         ax.set_title(lato, loc="left", fontsize=11)
-        ax.set_ylabel("equity (valuta di quotazione)")
+        ax.set_ylabel("bp netti cumulati")
         ax.grid(alpha=0.25)
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
-        ax.legend(loc="upper left", frameon=False)
-    fig.suptitle("Equity OOS — lotto fisso, costi inclusi, PnL nella valuta di quotazione (USD su EURUSD)", x=0.01, ha="left")
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc="upper left", frameon=False)
+    fig.suptitle("Equity OOS — motore veloce di V4, costi del Lab, bp netti a capitale fisso", x=0.01, ha="left")
     fig.tight_layout()
     plt.show()
     return fig
