@@ -135,7 +135,7 @@ def valuta(modello, X, y, rend, idx_train, idx_test, n_fasce=5):
 
 
 def importanza(modello, X):
-    """Peso di ogni feature (guadagno totale degli split), in % del totale."""
+    """Peso di ogni feature (guadagno totale degli split), in % del totale. Nessuno split: tutto 0."""
     g = modello.booster_.feature_importance(importance_type="gain")
-    s = pd.Series(100 * g / g.sum(), index=X.columns, name="peso_%")
+    s = pd.Series(100 * g / g.sum() if g.sum() > 0 else 0.0 * g, index=X.columns, name="peso_%")
     return s.sort_values(ascending=False).round(1)

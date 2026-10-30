@@ -7,7 +7,10 @@ Le funzioni delle celle del notebook, lavoro B (30/10/2026, docs/02 §B e §F).
   event_study_train(ds, direzione, H, quota=0.8, trigger=None) -> EventStudy
   sintesi_event_study(ev, timeframe) -> DataFrame
   controlla_scelta(ds, trigger, H, direzione) -> bool
-  prepara_lato(ds, direzione, trigger, H, quota=0.8) -> Lato
+  feature_lato(ds, trigger, df_btc=None) -> DataFrame
+  prepara_lato(ds, direzione, trigger, H, quota=0.8, feat=None) -> Lato
+  seleziona_lato(ds, lato, ...) -> (Selezione, Lato con la X scelta)
+  confronto_base_selezione(ds, lato, modello, lato_sel, modello_sel, ...) -> DataFrame
   allena(ds, lato, con_unicita=True, peso_rendimento=False, ...) -> (modello, fasce)
   confronti(ds, lato, modello, fasce=5) -> (tabella, percentile)
   guarda_oos(ds, lato, modello, fasce=5, ...) -> tabella
@@ -20,8 +23,17 @@ REGOLE
 - Nessuna scelta automatica: trigger e H del lato li scrive Mattia
   (controlla_scelta li controlla e basta).
 - Ogni addestramento e ogni sguardo all'OOS (tabella o backtest) finiscono nel
-  registro (registro.py, D4).
+  registro (registro.py, D4). Dal lavoro D anche ogni selezione e ogni confronto
+  base/selezione.
+- Lavoro D, regola sui NaN (decisione del revisore): i trigger che cadono nel
+  riscaldamento delle feature (le prime barre in cui una feature calcolata e' ancora NaN
+  per mancanza di storia) si tolgono dal target del lato PRIMA dello split, cosi' modello
+  base e modello con la selezione usano le stesse righe. I NaN sparsi dopo il
+  riscaldamento restano NaN: LightGBM li gestisce.
+- Lavoro D, regola fissata prima: soglia, confronti D3, OOS e backtest usano SEMPRE il
+  modello con la selezione; il modello base si stampa solo come riferimento.
 """
+import dataclasses
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -198,17 +210,100 @@ class Lato:
         return rendimenti_trigger(self.target)
 
 
-def prepara_lato(ds, direzione: int, trigger, H: int, quota: float = 0.8) -> Lato:
-    """Target del lato (passo 5), divisione train/test con purge ed embargo sull'H del lato e X (passo 6)."""
+def feature_lato(ds, trigger, df_btc=None) -> pd.DataFrame:
+    """Il catalogo del lavoro C sul dataset, con la famiglia 11 calcolata sui trigger del lato."""
+    from feature.calcolo import calcola_feature
+    trigger_lato = ds.df[list(trigger)].astype(bool).any(axis=1)
+    return calcola_feature(ds.df, ds.timeframe, trigger_lato=trigger_lato, df_btc=df_btc)
+
+
+def prepara_lato(ds, direzione: int, trigger, H: int, quota: float = 0.8, feat=None) -> Lato:
+    """
+    Target del lato (passo 5), divisione train/test con purge ed embargo sull'H del lato e X
+    (passo 6). Con `feat` (lavoro D) si tolgono prima i trigger nel riscaldamento delle feature.
+    """
     nome = NOMI_LATO[direzione]
     target = costruisci_target(ds.df, list(trigger), direzione, H, costi=ds.costi)
     print(f"===== {nome} · H = {H} barre ({ore(H, ds.timeframe)}) =====")
+    extra = {}
+    if feat is not None:
+        from feature.calcolo import riscaldamento
+        _, barre = riscaldamento(feat)
+        inizio = ds.df.index[min(barre, len(ds.df) - 1)]
+        tolti = int((target.index < inizio).sum())
+        target = target.loc[target.index >= inizio]
+        extra = {"feat": feat, "inizio_feature": inizio, "tolti_riscaldamento": tolti}
+        print(f"riscaldamento delle feature: {barre} barre, fino al {inizio:%d/%m/%Y %H:%M} UTC · "
+              f"trigger tolti dal target (per il modello base e per quello con la selezione): {tolti}")
     print(f"target: {len(target)} trigger · classe 1 {target['TARGET'].mean():.1%} · "
           f"bp netti medi {target['netto_bp'].mean():.2f}")
     idx_train, idx_test = split_train_test(target, ds.df_is, horizon=H, quota=quota)
     X = costruisci_X(ds.df, target, list(trigger), ds.filtri)
     return Lato(direzione=direzione, trigger=list(trigger), H=int(H), target=target, idx_train=idx_train,
-                idx_test=idx_test, idx_oos=indici_oos(target, ds.df_is), X=X, quota=quota)
+                idx_test=idx_test, idx_oos=indici_oos(target, ds.df_is), X=X, quota=quota, extra=extra)
+
+
+def seleziona_lato(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = False, seme: int = 0,
+                   collaudo: bool = False, macchina=None):
+    """
+    Feature selection del lato sul solo train (passo 7b): candidate = le feature del catalogo
+    calcolate + i filtri del Lab (F* e VWAP_*); l'identita' del trigger resta sempre. Stampa
+    i conteggi e il tempo; registra la selezione. Ritorna (Selezione, Lato con la X scelta:
+    stesse righe, stessi train/test/OOS).
+    """
+    from selezione import selezione
+    if "feat" not in lato.extra:
+        raise ValueError("prepara_lato senza feat: servono le feature del lato (feature_lato)")
+    feat = lato.extra["feat"]
+    filtri = [c for c in lato.X.columns if c not in lato.trigger]
+    X_cand = pd.concat([lato.X[lato.trigger + filtri], feat.loc[lato.target.index]], axis=1)
+    inizio_test = ds.df_is.index[barra_confine(ds.df_is, lato.quota)]
+    sel = selezione(X_cand, lato.y, ds.df, lato.idx_train, inizio_test, lato.H, sempre=lato.trigger, seme=seme,
+                    con_unicita=con_unicita, peso_rendimento=peso_rendimento, netto_bp=lato.target["netto_bp"])
+    print(f"===== {lato.nome} · selezione sul train: {len(lato.idx_train)} trigger, "
+          f"{X_cand.shape[1] - len(lato.trigger)} candidate + 10 sonde, K = {sel.K} · {sel.secondi:.1f} s =====")
+    print(" · ".join(f"{k}: {v}" for k, v in sel.conteggio.items()))
+    lato_sel = dataclasses.replace(lato, X=X_cand[lato.trigger + sel.tenute],
+                                   extra={**lato.extra, "selezione": sel})
+    registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
+        "tipo": "selezione", **_base_voce(ds, lato, collaudo), "candidate": X_cand.shape[1] - len(lato.trigger),
+        "tenute": sel.tenute, "K": sel.K, "conteggio": sel.conteggio, "secondi": round(sel.secondi, 1),
+        "seme": seme, "regola": "B: 3 giri su 4 sopra zero e sopra la sonda migliore del giro",
+        "esiti": sel.tabella["esito"].to_dict(),
+        "trigger_tolti_riscaldamento": lato.extra.get("tolti_riscaldamento")}, macchina=macchina)
+    return sel, lato_sel
+
+
+def confronto_base_selezione(ds, lato: Lato, modello, lato_sel: Lato, modello_sel, n_fasce: int = 5,
+                             collaudo: bool = False, macchina=None) -> pd.DataFrame:
+    """
+    AUC e fasce sul test del modello base e di quello con la selezione, uno accanto all'altro.
+    Solo un riferimento: il modello che va avanti e' sempre quello con la selezione (regola
+    fissata prima). Si registra come prova.
+    """
+    if not (lato.target.index.equals(lato_sel.target.index) and lato.idx_train.equals(lato_sel.idx_train)
+            and lato.idx_test.equals(lato_sel.idx_test)):
+        raise ValueError("base e selezione devono usare le stesse righe di target, train e test")
+    import contextlib
+    import io
+    tab, auc = {}, {}
+    for nome, l, m in (("base", lato, modello), ("selezione", lato_sel, modello_sel)):
+        with contextlib.redirect_stdout(io.StringIO()):
+            tab[nome] = valuta(m, l.X, l.y, l.rend, l.idx_train, l.idx_test, n_fasce=n_fasce)
+        auc[nome] = {n: float(roc_auc_score(l.y.loc[i], m.predict_proba(l.X.loc[i])[:, 1]))
+                     for n, i in (("train", l.idx_train), ("test", l.idx_test))}
+    fianco = pd.concat({k: v[["trade", "vincenti_%", "bp_medi_netti"]] for k, v in tab.items()}, axis=1)
+    print(f"===== {lato.nome} · test: modello base (riferimento) e modello con la selezione =====")
+    print(f"AUC base      train {auc['base']['train']:.3f}   test {auc['base']['test']:.3f}   "
+          f"({lato.X.shape[1]} colonne)")
+    print(f"AUC selezione train {auc['selezione']['train']:.3f}   test {auc['selezione']['test']:.3f}   "
+          f"({lato_sel.X.shape[1]} colonne)")
+    print(fianco.to_string())
+    registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
+        "tipo": "confronto", **_base_voce(ds, lato, collaudo), "auc": auc,
+        "colonne": {"base": list(lato.X.columns), "selezione": list(lato_sel.X.columns)},
+        "fasce_test": {k: v.reset_index().to_dict(orient="records") for k, v in tab.items()}}, macchina=macchina)
+    return fianco
 
 
 def _base_voce(ds, lato, collaudo):

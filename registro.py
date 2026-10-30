@@ -24,6 +24,9 @@ COSA SI REGISTRA (lavoro B)
   tipo "addestramento"  ogni modello addestrato: lato, H, trigger, colonne della X,
                         pesi, parametri, semi, metriche train/test
   tipo "oos"            ogni volta che si guarda l'OOS (tabella OOS o backtest)
+  tipo "selezione"      ogni feature selection (lavoro D): colonne tenute e tolte con il motivo,
+                        sonde, K, tempo
+  tipo "confronto"      il confronto sul test fra modello base e modello con la selezione (lavoro D)
 Ogni voce porta data (UTC, dal sistema), macchina, commit di V4 e di questo
 repo, e collaudo = True/False (valori di collaudo, non scelte).
 """
@@ -34,7 +37,7 @@ from pathlib import Path
 import pandas as pd
 
 CARTELLA = "registro_ml"
-TIPI = ("addestramento", "oos")
+TIPI = ("addestramento", "oos", "selezione", "confronto")
 
 
 def cartella_registro(cartella_dati) -> Path:
@@ -127,4 +130,6 @@ def stampa_conto(cartella_dati, dataset: str) -> None:
     c = conta(cartella_dati, dataset)
     print(f"Registro {str(dataset).upper()} ({cartella_registro(cartella_dati)}): "
           f"{c['addestramento']} modelli addestrati (di collaudo {c['addestramento_collaudo']}) · "
+          f"selezioni {c['selezione']} (di collaudo {c['selezione_collaudo']}) · "
+          f"confronti base/selezione {c['confronto']} (di collaudo {c['confronto_collaudo']}) · "
           f"OOS guardato {c['oos']} volte (di collaudo {c['oos_collaudo']})")
