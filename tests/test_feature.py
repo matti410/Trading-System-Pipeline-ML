@@ -198,3 +198,25 @@ def test_regressione_uguale_a_polyfit(v4):
     sigma = np.log(df["Close"]).diff().rolling(n).std().iloc[t]
     assert f["pend_24h"].iloc[t] == pytest.approx(pendenza / sigma, rel=1e-9)
     assert f["r2_24h"].iloc[t] == pytest.approx(r2, rel=1e-9)
+
+
+def test_vr_24h_stesso_passo_in_ore_su_M5_e_M15(v4, monkeypatch, capsys):
+    import engine.indicatori as ind
+    passi = {}
+    originale = ind.variance_ratio
+
+    def spia(close, orizzonte=4, finestra=192):
+        passi[tf] = (orizzonte, finestra)
+        return originale(close, orizzonte=orizzonte, finestra=finestra)
+    monkeypatch.setattr(ind, "variance_ratio", spia)
+    minuti = {"M5": 5, "M15": 15}
+    for tf in ("M5", "M15"):
+        f = calcolo.calcola_feature(mercato(4000, tf), tf, nomi=["vr_24h"], verbose=False)
+        assert f["vr_24h"].notna().any()
+    assert passi["M5"][0] * minuti["M5"] == passi["M15"][0] * minuti["M15"] == 60     # 1 ora su tutti e due
+    assert passi["M15"] == (4, 96) and passi["M5"] == (12, 288)
+    # su H1 un'ora e' 1 barra (< 2): non si calcola e si stampa
+    capsys.readouterr()
+    f = calcolo.calcola_feature(mercato(500, "H1"), "H1", nomi=["vr_24h"], verbose=False)
+    assert "vr_24h" not in f.columns and "passo sotto 2 barre" in f.attrs["non_calcolate"]["vr_24h"]
+    assert "vr_24h" in capsys.readouterr().out

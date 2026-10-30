@@ -27,7 +27,7 @@ Proposta per V4: estendere verifica_degenerazione alle colonne continue.
 import numpy as np
 import pandas as pd
 
-from feature.catalogo import CATALOGO, MIN_BARRE, Contesto
+from feature.catalogo import CATALOGO, MIN_BARRE, MIN_PASSO_BARRE, Contesto
 
 QUOTA_COSTANTE = 0.95
 MIN_NON_NULLI = 30
@@ -48,6 +48,9 @@ def _motivo_non_calcolata(voce, ctx):
     corte = [f"{o} h = {ctx.n(o)} barre" for o in voce["finestre_ore"] if ctx.n(o) < MIN_BARRE]
     if corte:
         return f"finestra sotto {MIN_BARRE} barre ({', '.join(corte)})"
+    if voce.get("passo_ore") is not None and ctx.n(voce["passo_ore"]) < MIN_PASSO_BARRE:
+        return (f"passo sotto {MIN_PASSO_BARRE} barre ({voce['passo_ore']} h = "
+                f"{ctx.n(voce['passo_ore'])} barre)")
     return None
 
 
@@ -75,9 +78,9 @@ def calcola_feature(df, timeframe, trigger_lato=None, df_btc=None, nomi=None, ve
         colonne[nome] = voce["funzione"](ctx).astype(float).rename(nome)
     feat = pd.DataFrame(colonne, index=df.index)
     feat.attrs["non_calcolate"] = non_calcolate
-    corte = {n: m for n, m in non_calcolate.items() if m.startswith("finestra")}
+    corte = {n: m for n, m in non_calcolate.items() if m.startswith(("finestra", "passo"))}
     if corte:
-        print(f"{timeframe}: {len(corte)} feature non calcolate per finestra sotto {MIN_BARRE} barre: "
+        print(f"{timeframe}: {len(corte)} feature non calcolate per finestra o passo troppo corti: "
               + "; ".join(f"{n} ({m})" for n, m in corte.items()))
     if verbose:
         print(f"{timeframe}: {feat.shape[1]} feature calcolate su {len(CATALOGO) if nomi is None else len(nomi)} "

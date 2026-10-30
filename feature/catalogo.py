@@ -41,6 +41,8 @@ GIORNI_VOL_ORA = 20
 RITARDI = range(1, 7)
 CANDELE = (0, 1, 2)
 ORA_RIF = 24          # sigma di riferimento per le distanze: sigma_24h
+PASSO_VR_ORE = 1      # passo del variance ratio, in ore (decisione di Mattia sul §H, 30/10/2026)
+MIN_PASSO_BARRE = 2   # sotto 2 barre il variance ratio non ha senso: la feature non si calcola
 
 
 def _pulisci(s: pd.Series) -> pd.Series:
@@ -134,9 +136,9 @@ def _er(ore):
 
 
 def _vr_24h(c):
-    # variance_ratio di V4 sulla finestra di 24 h, con l'orizzonte di V4 (default: 4 barre)
+    # variance_ratio di V4 sulla finestra di 24 h, con il passo di PASSO_VR_ORE ore (4 barre su M15, 12 su M5)
     from engine.indicatori import variance_ratio
-    return variance_ratio(c.df["Close"], finestra=c.n(24))
+    return variance_ratio(c.df["Close"], orizzonte=c.n(PASSO_VR_ORE), finestra=c.n(24))
 
 
 def _ac1_168h(c):
@@ -337,10 +339,11 @@ def _da_trig_prec(c):
 CATALOGO = {}
 
 
-def _metti(nome, famiglia, finestre, formula, funzione, richiede=None, conteggio=False):
+def _metti(nome, famiglia, finestre, formula, funzione, richiede=None, conteggio=False, passo_ore=None):
     CATALOGO[nome] = {"famiglia": famiglia, "finestre_ore": tuple(finestre),
                       "finestra_ore": max(finestre) if finestre else None, "formula": formula,
-                      "funzione": funzione, "richiede": richiede, "conteggio": conteggio}
+                      "funzione": funzione, "richiede": richiede, "conteggio": conteggio,
+                      "passo_ore": passo_ore}
 
 
 for k in RITARDI:
@@ -355,7 +358,8 @@ _metti("park_24h", "2 volatilita'", (24,), "Parkinson su 24 h / sigma_24h", _par
 _metti("gk_24h", "2 volatilita'", (24,), "Garman-Klass su 24 h / sigma_24h", _garman_klass)
 for w in W:
     _metti(f"er_{w}h", "3 efficienza", (w,), "efficiency ratio di Kaufman (V4, con segno)", _er(w))
-_metti("vr_24h", "3 efficienza", (24,), "variance ratio di V4 su 24 h (orizzonte di V4: 4 barre)", _vr_24h)
+_metti("vr_24h", "3 efficienza", (24,), f"variance ratio di V4 su 24 h, passo {PASSO_VR_ORE} ora", _vr_24h,
+       passo_ore=PASSO_VR_ORE)
 _metti("ac1_168h", "3 efficienza", (168,), "autocorrelazione di r a ritardo 1 su 168 h", _ac1_168h)
 for w in W:
     pend, r2 = _regressione(w)

@@ -1,8 +1,8 @@
 # 00 · Stato (aggiornato al 30/10/2026)
 
-**Incarico in corso:** **lavoro C** (catalogo delle feature di contesto) di `docs/02_PROPOSTA_CONVERSIONE.md`,
-§C e §F: codice sul ramo `lavoro-c-feature`, in revisione (chiusura e punti da confermare in docs/02 §H).
-Fatti: lavoro A (PR #1) e lavoro B (PR #2), uniti. D viene dopo, con il suo via.
+**Incarico in corso:** **lavoro D** (feature selection, con le sonde) di `docs/02_PROPOSTA_CONVERSIONE.md`,
+§D e §F.
+Fatti: lavoro A (PR #1), lavoro B (PR #2), lavoro C (PR #3, catalogo delle feature; decisioni in docs/02 §H).
 
 ## Com'è il repo oggi
 Una prima bozza fatta su EURUSD M15 con una copia del vecchio motore (V3).
