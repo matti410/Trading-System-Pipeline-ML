@@ -1,0 +1,18 @@
+# Versioni bloccate. Le prime righe sono le stesse dell'ambiente di V4 (il Lab):
+# cambiarle solo insieme a V4.
+numpy==2.5.3
+pandas==3.0.6
+scipy==1.18.1
+numba==0.68.0
+TA-Lib==0.8.1
+backtesting==0.6.6
+scikit-learn==1.9.1
+matplotlib==3.11.2
+ccxt==4.5.78
+truststore==0.10.1
+# Solo per questo repo
+lightgbm==4.7.0
+pytest==9.1.1
+ipykernel==7.4.0
+# Serve ancora a backtest_oos.py: si toglie con il lavoro B (D5, motore veloce di V4)
+vectorbt==1.1.2
