@@ -3,6 +3,7 @@ Il dataset di lavoro, preso dal Lab (V4) come la sua schermata 1 (30/10/2026, do
 
   apri(symbol, timeframe, cartella, aggiorna=False) -> Dataset
   trigger_candidati(direzione) / filtri() -> list[str]
+  storico_btc(ds) -> DataFrame | None   BTC dello stesso exchange, mercato e timeframe (lavoro C)
 
 DA DOVE VIENE OGNI COSA (tutto da V4, niente copie)
 ---------------------------------------------------
@@ -45,6 +46,7 @@ class Dataset:
     filtri: list = field(default_factory=list)
     impronta: str = ""          # "ok" o "assente" (il dataset non e' ancora entrato nello studio)
     aggiornamento: object = None
+    riscaldamento_v4: int = 0   # barre iniziali del CSV tolte dagli indicatori di V4 (lavoro C)
 
     def costo_bp(self) -> dict:
         """Commissione andata e ritorno e spread di un passo al prezzo mediano dell'in-sample, in bp."""
@@ -172,6 +174,7 @@ def apri(symbol: str, timeframe: str, cartella, aggiorna: bool = False, macchina
     grezzo = d.df                                   # come vetrina.prepara: i costi sulle barre prima degli indicatori
     with vetrina._zitto():
         df = aggiungi_indicatori(d.df)
+    riscaldamento_v4 = int(d.df.index.get_loc(df.index[0]))   # aggiungi_indicatori toglie le prime barre
     df_is, df_oos = vetrina.dividi_dati(d, df)      # modo "data": split_al_confine, nessuna scrittura
     costi, _ = vetrina.costi_storico(symbol, grezzo, funding=d.funding, df_prezzo=df_is)
 
@@ -189,4 +192,21 @@ def apri(symbol: str, timeframe: str, cartella, aggiorna: bool = False, macchina
     return Dataset(symbol=symbol, timeframe=timeframe, cartella=str(cartella), df=df, df_is=df_is,
                    df_oos=df_oos, confine=confine, funding=d.funding, costi=costi,
                    pip=float(costi["pip_size"]), solo_long=lungo_solo, trigger_long=t_long,
-                   trigger_short=t_short, filtri=f, impronta=impronta, aggiornamento=d.aggiornamento)
+                   trigger_short=t_short, filtri=f, impronta=impronta, aggiornamento=d.aggiornamento,
+                   riscaldamento_v4=riscaldamento_v4)
+
+
+def storico_btc(ds):
+    """
+    Le barre di BTC dello stesso exchange, mercato e timeframe del dataset, lette con il
+    caricatore di V4 (vetrina.carica_storico) dalla stessa cartella dei dati. None se il
+    dataset e' gia' BTC. Non si allineano qui: le allinea la famiglia 10 del catalogo,
+    sullo stesso indice e senza riempire i buchi.
+    """
+    from engine import vetrina
+    from engine.exchange import parti_symbol
+    p = parti_symbol(ds.symbol)
+    if p["base"] == "BTC":
+        return None
+    simbolo = f"{p['exchange']}_{p['mercato']}_BTC{p['quotata']}"
+    return vetrina.carica_storico(simbolo, ds.cartella, ds.timeframe)
