@@ -108,3 +108,28 @@ def test_backtest_un_lato_senza_feature(ds_vero, tmp_path):
     assert ("LONG", "modello") in righe and ("SHORT", "modello") not in righe
     assert ("COMBINATO", "modello") not in righe and ("COMBINATO", "tutti i trigger") in righe
     assert len(ris["modello"]["trade"]["SHORT"]) == 0 and len(ris["modello"]["trade"]["COMBINATO"]) == 0
+
+
+@pytest.mark.parametrize("d", [1, -1])
+def test_un_lato_solo_passi_8_e_9(ds_vero, tmp_path, d, monkeypatch):
+    """Un lato solo (l'altro lasciato vuoto nella cella 4), fuori dallo spot: soglia, confronti, OOS e backtest."""
+    import pipeline
+    ds = dataclasses.replace(ds_vero, cartella=str(tmp_path))
+    trig = (ds.trigger_long if d == 1 else ds.trigger_short)[:1]
+    lato = pipeline.prepara_lato(ds, d, trig, 16)
+    modello, _ = pipeline.allena(ds, lato, collaudo=True)
+    pipeline.mostra_soglia(lato, modello)
+    pipeline.confronti(ds, lato, modello)
+    pipeline.guarda_oos(ds, lato, modello, collaudo=True)
+    tab, ris = pipeline.backtest(ds, {d: lato}, {d: modello}, collaudo=True)
+    altro = "SHORT" if d == 1 else "LONG"
+    for scenario in ("modello", "tutti i trigger"):
+        assert tab.loc[(altro, scenario), "trade"] == 0
+        assert tab.loc[("COMBINATO", scenario), "trade"] == tab.loc[(lato.nome, scenario), "trade"] > 0
+    from backtest_oos import grafico_equity
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+    grafico_equity(ris)
+    plt.close("all")
