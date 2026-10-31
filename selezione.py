@@ -28,7 +28,10 @@ LE REGOLE, FISSATE PRIMA DI GUARDARE I DATI
 4. Importanza: in ogni giro LightGBM (PARAMETRI_BASE, pesi di unicita') su tutte le
    colonne; sul blocco di validazione si mescolano INSIEME le colonne di un gruppo (stessa
    permutazione delle righe) e si misura quanto peggiora la log-loss. Media di 5
-   mescolamenti con semi fissi.
+   mescolamenti con semi fissi. Con PESO_RENDIMENTO acceso (revisione della PR #8) anche la
+   log-loss di validazione, base e mescolata, e' pesata: min(|netto_bp|, tetto) a media 1, con
+   il tetto delle righe di FIT del giro (lo stesso dell'addestramento); niente unicita' sulla
+   validazione. Cosi' conta quanto la colonna aiuta sui trade grandi, non sulla frequenza delle vincite.
 5. Regola B (decisione di Mattia del 30/10/2026, docs/02 §F): si tiene un gruppo se in
    almeno 3 giri su 4 la sua importanza e' sopra zero E sopra la sonda migliore DI QUEL GIRO.
    Poi al massimo K = min(15, trigger di train / 100) gruppi, i primi per mediana. Del gruppo
@@ -115,9 +118,20 @@ def gruppi_correlati(X_train, soglia=SOGLIA_RHO):
     return tab
 
 
-def _log_loss(y, p):
+def _log_loss(y, p, pesi=None):
     from sklearn.metrics import log_loss
-    return log_loss(y, np.clip(p, 1e-15, 1 - 1e-15), labels=[0, 1])
+    return log_loss(y, np.clip(p, 1e-15, 1 - 1e-15), labels=[0, 1], sample_weight=pesi)
+
+
+def pesi_validazione(netto_bp, idx_fit, idx_val):
+    """
+    Pesi della log-loss sul blocco di validazione, con PESO_RENDIMENTO acceso: min(|netto_bp|,
+    tetto) a media 1, con il tetto = 95° percentile di |netto_bp| delle SOLE righe di fit del
+    giro. Niente pesi di unicita'. Ritorna (pesi sulle righe di idx_val, tetto).
+    """
+    from pesi import pesi_rendimento, tetto_rendimento
+    tetto = tetto_rendimento(netto_bp.loc[idx_fit])
+    return pesi_rendimento(netto_bp.loc[idx_val], tetto=tetto).to_numpy(), tetto
 
 
 def importanza_gruppi(X, y, df, horizon, blocchi, gruppi, inizio_test, ripetizioni=RIPETIZIONI, seme=0,
@@ -138,7 +152,8 @@ def importanza_gruppi(X, y, df, horizon, blocchi, gruppi, inizio_test, ripetizio
                      peso_rendimento=peso_rendimento, netto_bp=netto_bp)
         Xv = X.loc[idx_val]
         yv = y.loc[idx_val].to_numpy()
-        base = _log_loss(yv, m.predict_proba(Xv)[:, 1])
+        wv = pesi_validazione(netto_bp, idx_fit, idx_val)[0] if peso_rendimento else None
+        base = _log_loss(yv, m.predict_proba(Xv)[:, 1], wv)
         colonna = {}
         for r, cols in membri.items():
             aumenti = []
@@ -146,7 +161,7 @@ def importanza_gruppi(X, y, df, horizon, blocchi, gruppi, inizio_test, ripetizio
                 ordine = np.random.default_rng([seme, g, rip]).permutation(len(Xv))
                 Xp = Xv.copy()
                 Xp[list(cols)] = Xv[list(cols)].to_numpy()[ordine]
-                aumenti.append(_log_loss(yv, m.predict_proba(Xp)[:, 1]) - base)
+                aumenti.append(_log_loss(yv, m.predict_proba(Xp)[:, 1], wv) - base)
             colonna[r] = float(np.mean(aumenti))
         imp[f"giro_{g}"] = pd.Series(colonna)
     return pd.DataFrame(imp)

@@ -228,3 +228,68 @@ def test_spento_identico(monkeypatch):
     spento = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"], peso_rendimento=False, netto_bp=netto)
     pd.testing.assert_frame_equal(prima.importanze, spento.importanze, check_exact=True)
     assert prima.tenute == spento.tenute
+
+
+def test_validazione_spento_come_prima(monkeypatch):
+    """(1) PESO_RENDIMENTO = False: la log-loss di validazione e' quella di prima (nessun peso), importanze al bit."""
+    X, y, df, ti, netto = _caso_pesi()
+    H, fine = 4, df.index[-1]
+    oggi = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"], peso_rendimento=False, netto_bp=netto)
+    from sklearn.metrics import log_loss
+
+    def di_prima(y, p, pesi=None):                                  # la funzione com'era prima della revisione
+        assert pesi is None
+        return log_loss(y, np.clip(p, 1e-15, 1 - 1e-15), labels=[0, 1])
+    monkeypatch.setattr(S, "_log_loss", di_prima)
+    prima = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"], peso_rendimento=False, netto_bp=netto)
+    pd.testing.assert_frame_equal(oggi.importanze, prima.importanze, check_exact=True)
+
+
+def test_tetto_validazione_solo_dal_fit():
+    """(2) Il tetto dei pesi di validazione viene dalle righe di fit: cambiare la validazione non lo cambia."""
+    from pesi import tetto_rendimento
+    X, y, df, ti, netto = _caso_pesi()
+    idx_fit, idx_val = S.blocchi_interni(ti, df, 4, df.index[-1])[0]
+    w, tetto = S.pesi_validazione(netto, idx_fit, idx_val)
+    assert tetto == tetto_rendimento(netto.loc[idx_fit])
+    n2 = netto.copy()
+    n2.loc[idx_val] = n2.loc[idx_val] * 50 + 1e5
+    w2, tetto2 = S.pesi_validazione(n2, idx_fit, idx_val)
+    assert tetto2 == tetto
+    atteso = np.minimum(n2.loc[idx_val].abs(), tetto)
+    np.testing.assert_allclose(w2, atteso / atteso.mean())          # min(|netto|, tetto del fit), media 1
+    assert len(w) == len(idx_val)
+
+
+def caso_vol_grandi(seme=0, n=5000):
+    """
+    «vol» predice solo la volatilita': con vol > 0 il mercato e' mosso, i vincenti sono molti di piu'
+    ma i bp medi attesi sono gli stessi (-10). «grandi» predice il verso dei trade grandi (8%, 400 bp).
+    """
+    rng = np.random.default_rng([seme, 12])
+    idx = pd.date_range("2023-01-01", periods=n * 3, freq="15min", tz="UTC")
+    df = pd.DataFrame({"Open": 1.0, "Close": 1.0}, index=idx)
+    ti = idx[np.sort(rng.choice(n * 3 - 10, n, replace=False))]
+    vol, grandi = rng.normal(size=n), rng.normal(size=n)
+    piccolo = rng.normal(0, np.where(vol > 0, 40.0, 8.0))
+    salto = rng.random(n) < 0.08
+    verso = np.where(rng.random(n) < 0.8, np.sign(grandi), -np.sign(grandi))
+    netto = pd.Series(piccolo + salto * verso * 400.0 - 10.0, index=ti)
+    X = pd.DataFrame({"E1_TRIG": 1, "vol": vol, "grandi": grandi}, index=ti)
+    for i in range(3):
+        X[f"rumore_{i}"] = rng.normal(size=n)
+    return X, pd.Series((netto > 0).astype(int), index=ti), df, ti, netto
+
+
+def test_peso_rendimento_premia_i_trade_grandi():
+    """(3) Con PESO_RENDIMENTO = True conta chi predice i trade grandi, non chi predice la volatilita'."""
+    X, y, df, ti, netto = caso_vol_grandi()
+    alto = X["vol"] > 0
+    assert y[alto].mean() - y[~alto].mean() > 0.2                     # vol: molti piu' vincenti...
+    assert abs(netto[alto].mean() - netto[~alto].mean()) < 10         # ...ma stessi bp medi (a meno del rumore)
+    med = {}
+    for acceso in (False, True):
+        sel = S.selezione(X, y, df, ti, df.index[-1], 4, sempre=["E1_TRIG"], peso_rendimento=acceso, netto_bp=netto)
+        med[acceso] = sel.importanze.median(axis=1)
+    assert med[True]["grandi"] > med[True]["vol"]
+    assert med[False]["vol"] > med[False]["grandi"]                   # spento: vince la volatilita'
