@@ -124,10 +124,42 @@ def sintesi_event_study(ev, timeframe: str) -> pd.DataFrame:
     return s
 
 
-def grafico_event_study(ev, titolo: str = ""):
+def sintesi_da_mostrare(sintesi: pd.DataFrame, n_mostra: int = 10):
     """
-    Le curve dell'event study con il grafico di V4 (EventStudy.plot), per TUTTI i trigger
-    misurati, con le occorrenze nel train accanto al nome (nella legenda). Ritorna le etichette.
+    Solo visualizzazione (passo 3): dalla sintesi completa, i trigger con picco_pct > 0
+    (il picco di V4 ha gia' il segno del lato), prima quelli oltre il rumore e poi gli
+    altri, dentro ciascun gruppo per picco decrescente; al massimo n_mostra righe.
+    Nessun filtro sulle occorrenze. Ritorna (tabella, conteggi per la riga sotto il grafico).
+    """
+    picco = pd.to_numeric(sintesi["picco_pct"], errors="coerce")
+    senza_curva = picco.isna()
+    # le colonne d'ordine prima del filtro: su una tabella gia' vuota pandas prenderebbe il loro indice
+    positivi = sintesi.assign(_oltre=sintesi["oltre_rumore"].fillna(False).astype(bool), _picco=picco)[picco > 0]
+    ordinati = positivi.sort_values(["_oltre", "_picco"], ascending=[False, False], kind="stable")
+    vista = ordinati.drop(columns=["_oltre", "_picco"]).head(int(n_mostra)).reset_index(drop=True)
+    conteggi = {"mostrati": len(vista), "totale": len(sintesi),
+                "picco_non_positivo": int((picco <= 0).sum()),
+                "oltre_i_primi": len(ordinati) - len(vista), "senza_curva": int(senza_curva.sum())}
+    return vista, conteggi
+
+
+def riga_mostrati(conteggi: dict, n_mostra: int = 10) -> str:
+    """La riga sotto il grafico: quanti trigger si vedono e perche' gli altri no."""
+    c = conteggi
+    motivi = f"{c['picco_non_positivo']} con picco ≤ 0, {c['oltre_i_primi']} oltre i primi {n_mostra}"
+    if c["senza_curva"]:
+        motivi += f", {c['senza_curva']} senza curva perché senza occorrenze nel train"
+    if c["mostrati"] == 0:
+        return (f"nessun trigger mostrato: nessuno dei {c['totale']} trigger ha il picco > 0 ({motivi}). "
+                "La sintesi completa resta nella variabile della cella.")
+    return f"mostrati {c['mostrati']} di {c['totale']} trigger ({motivi})"
+
+
+def grafico_event_study(ev, titolo: str = "", candidati=None):
+    """
+    Le curve dell'event study con il grafico di V4 (EventStudy.plot), con le occorrenze nel
+    train accanto al nome (nella legenda). candidati=None: TUTTI i trigger misurati; una lista:
+    solo quei trigger (piu' la curva del mercato, che V4 disegna sempre). Ritorna le etichette.
     """
     import copy
     n = occorrenze_train(ev)
@@ -136,6 +168,15 @@ def grafico_event_study(ev, titolo: str = ""):
     copia.curve = ev.curve.rename(columns=etichetta)
     copia.mercato = ev.mercato.rename(columns=etichetta)
     copia.sintesi = ev.sintesi.assign(candidato=ev.sintesi["candidato"].map(etichetta))
+    if candidati is not None:
+        nomi = [etichetta[c] for c in candidati]
+        if titolo:
+            print(titolo)
+        if nomi:
+            copia.plot(candidati=nomi, figsize=(13, 7.5))
+        else:
+            print("nessuna curva da disegnare: nessun trigger da mostrare.")
+        return nomi
     nomi = list(etichetta.values())
     senza = [c for c in getattr(ev, "candidati_richiesti", list(ev.curve.columns))
              if c not in ev.curve.columns or ev.curve[c].isna().all()]
