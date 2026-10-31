@@ -50,15 +50,41 @@ def test_controlla_scelta(v4):
     ds = _ds_finto()
     assert pipeline.controlla_scelta(ds, ["E1_A"], 16, 1) is True
     assert pipeline.controlla_scelta(ds, ["E1_SHORT_A"], 32, -1) is True
-    with pytest.raises(ValueError, match="TRIGGER_LONG"):
-        pipeline.controlla_scelta(ds, [], 16, 1)                 # scelta mancante: si ferma
-    with pytest.raises(ValueError, match="TRIGGER_SHORT"):
-        pipeline.controlla_scelta(ds, ["E1_SHORT_A"], None, -1)
+    with pytest.raises(ValueError, match="H_SHORT"):
+        pipeline.controlla_scelta(ds, ["E1_SHORT_A"], None, -1)  # trigger senza H: si ferma
+    with pytest.raises(ValueError, match="H_LONG"):
+        pipeline.controlla_scelta(ds, ["E1_A"], None, 1)
     with pytest.raises(ValueError, match="Non sono trigger"):
         pipeline.controlla_scelta(ds, ["E1_SHORT_A"], 16, 1)     # trigger dell'altro lato
     for H in (0, 2.5, True, "16"):
         with pytest.raises(ValueError):
             pipeline.controlla_scelta(ds, ["E1_A"], H, 1)
+
+
+def test_lato_vuoto_saltato(v4, capsys):
+    ds = _ds_finto()
+    for trigger in (None, []):
+        for H in (None, 16, 0, "x"):                              # qualunque sia H
+            assert pipeline.controlla_scelta(ds, trigger, H, 1) is False
+            assert pipeline.controlla_scelta(ds, trigger, H, -1) is False
+    uscita = capsys.readouterr().out
+    assert "LONG: nessun trigger scelto, lato saltato" in uscita
+    assert "SHORT: nessun trigger scelto, lato saltato" in uscita
+
+
+def test_lati_scelti(v4, capsys):
+    ds = _ds_finto()
+    assert pipeline.lati_scelti(ds, {1: (["E1_A"], 16), -1: ([], None)}, {}) == [1]           # SHORT vuoto
+    assert pipeline.lati_scelti(ds, {1: ([], None), -1: (["E1_SHORT_A"], 32)}, {}) == [-1]    # LONG vuoto
+    assert pipeline.lati_scelti(ds, {1: (["E1_A"], 16), -1: (["E1_SHORT_A"], 32)}, {}) == [1, -1]
+    with pytest.raises(ValueError, match="Scegli i trigger di almeno un lato"):
+        pipeline.lati_scelti(ds, {1: ([], None), -1: (None, 8)}, {})
+    with pytest.raises(ValueError, match="H_LONG"):
+        pipeline.lati_scelti(ds, {1: (["E1_A"], None), -1: ([], None)}, {})                   # trigger senza H
+    spot = _ds_finto(solo_long=True)
+    assert pipeline.lati_scelti(spot, {1: (["E1_A"], 16), -1: ([], None)}, {}) == [1]
+    with pytest.raises(ValueError, match="Scegli i trigger di almeno un lato"):
+        pipeline.lati_scelti(spot, {1: ([], None), -1: ([], None)}, {})
 
 
 def test_spot_short(v4):

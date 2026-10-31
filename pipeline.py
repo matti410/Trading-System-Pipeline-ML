@@ -191,9 +191,9 @@ def grafico_event_study(ev, titolo: str = "", candidati=None):
 def controlla_scelta(ds, trigger, H, direzione: int, occorrenze=None) -> bool:
     """
     Controlla la scelta di Mattia per un lato. True = il lato si usa; False = lato
-    saltato (lo short sullo spot, lasciato vuoto). Si ferma se manca la scelta, se un
-    nome non e' un trigger del lato, se H non e' un numero di barre >= 1, o se si
-    chiede lo short sullo spot.
+    saltato (nessun trigger scritto, qualunque sia H; oppure lo short sullo spot).
+    Si ferma se ci sono trigger ma H manca o non e' un numero di barre >= 1, se un
+    nome non e' un trigger del lato, o se si chiede lo short sullo spot.
 
     occorrenze: le occorrenze nel train di ogni trigger (occorrenze_train). Un trigger
     scelto sotto il minimo del Lab da' un AVVISO ben visibile, ma non ferma niente.
@@ -205,9 +205,12 @@ def controlla_scelta(ds, trigger, H, direzione: int, occorrenze=None) -> bool:
             raise ValueError("Sullo spot lo short non esiste: lascia vuoto TRIGGER_SHORT.")
         print("SHORT: saltato (spot, lo short non esiste).")
         return False
-    if not trigger or H is None:
-        raise ValueError(f"Scrivi TRIGGER_{nome} (una lista di nomi) e H_{nome} (in barre) nella cella 4, "
-                         "guardando l'event study qui sopra. Finché mancano, il notebook si ferma qui.")
+    if not trigger:
+        print(f"{nome}: nessun trigger scelto, lato saltato")
+        return False
+    if H is None:
+        raise ValueError(f"Hai scritto TRIGGER_{nome}: scrivi anche H_{nome} (in barre) nella cella 4, "
+                         "guardando l'event study qui sopra. Finché manca, il notebook si ferma qui.")
     if isinstance(H, bool) or not isinstance(H, int) or H < 1:
         raise ValueError(f"H_{nome} deve essere un numero intero di barre >= 1, non {H!r}.")
     validi = ds.trigger_long if direzione == 1 else ds.trigger_short
@@ -223,6 +226,19 @@ def controlla_scelta(ds, trigger, H, direzione: int, occorrenze=None) -> bool:
         print(f"{riga}\n!!! AVVISO · {nome}: trigger con meno occorrenze nel train del minimo del Lab "
               f"({MIN_TRIGGER}): {dettaglio}.\n!!! La scelta resta valida: il notebook va avanti.\n{riga}")
     return True
+
+
+def lati_scelti(ds, scelta: dict, ev: dict) -> list:
+    """
+    La cella 4: controlla_scelta per LONG e SHORT, ritorna i lati usati. Un lato si puo'
+    lasciare vuoto; se sono vuoti tutti e due, si ferma.
+    """
+    lati = [d for d in (1, -1) if controlla_scelta(ds, scelta[d][0], scelta[d][1], d,
+                                                    occorrenze=occorrenze_train(ev.get(d)))]
+    if not lati:
+        raise ValueError("Scegli i trigger di almeno un lato nella cella 4 (TRIGGER_LONG o TRIGGER_SHORT, "
+                         "con il suo H).")
+    return lati
 
 
 @dataclass
