@@ -48,7 +48,12 @@ def pesi_unicita(indice, df_lato, horizon):
     return pd.Series(peso, index=indice, name="peso")
 
 
-def pesi_rendimento(netto_bp_train, quantile=0.95):
+def tetto_rendimento(netto_bp_fit, quantile=0.95) -> float:
+    """Il tetto dei pesi per rendimento: il 95° percentile di |netto_bp| delle sole righe date (quelle di fit)."""
+    return float(np.quantile(netto_bp_fit.abs(), quantile))
+
+
+def pesi_rendimento(netto_bp_train, quantile=0.95, tetto=None):
     """
     Peso per |rendimento| (D1, decisione di Mattia del 30/10/2026): min(|netto_bp|,
     tetto), con il tetto = 95° percentile di |netto_bp| del SOLO train. Il tetto
@@ -56,9 +61,12 @@ def pesi_rendimento(netto_bp_train, quantile=0.95):
     dominerebbero l'addestramento. Normalizzati a media 1, come i pesi di unicita'.
 
     netto_bp_train : Series dei bp netti, gia' ristretta a idx_train.
+    tetto          : None = dalle stesse righe. Per la validazione della selezione si passa
+                     il tetto delle righe di fit (tetto_rendimento), mai quello della validazione.
     """
     assoluto = netto_bp_train.abs()
-    tetto = float(np.quantile(assoluto, quantile))
+    if tetto is None:
+        tetto = tetto_rendimento(netto_bp_train, quantile)
     peso = np.minimum(assoluto, tetto)
     if peso.sum() <= 0:
         raise ValueError("pesi per rendimento tutti nulli")

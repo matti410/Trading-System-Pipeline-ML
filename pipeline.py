@@ -36,6 +36,7 @@ REGOLE
 import dataclasses
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
@@ -373,10 +374,11 @@ def seleziona_lato(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bo
         riga = "!" * 78
         print(f"{riga}\n!!! {lato.nome}: la selezione non ha tenuto nessuna feature, il modello non distingue "
               f"i trigger.\n!!! Ai passi 8 e 9 per questo lato solo «tutti i trigger», senza fasce né soglia.\n{riga}")
+    # la selezione ricorda i pesi usati: il modello con le feature scelte deve usare gli stessi (allena)
     lato_sel = dataclasses.replace(lato, X=X_cand[lato.trigger + sel.tenute],
-                                   extra={**lato.extra, "selezione": sel})
+                                   extra={**lato.extra, "selezione": sel, "peso_rendimento": bool(peso_rendimento)})
     registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
-        "tipo": "selezione", **_base_voce(ds, lato, collaudo), "candidate": X_cand.shape[1] - len(lato.trigger),
+        "tipo": "selezione", **_base_voce(ds, lato, collaudo, peso_rendimento), "candidate": X_cand.shape[1] - len(lato.trigger),
         "tenute": sel.tenute, "K": sel.K, "conteggio": sel.conteggio, "secondi": round(sel.secondi, 1),
         "seme": seme, "regola": "B: 3 giri su 4 sopra zero e sopra la sonda migliore del giro",
         "esiti": sel.tabella["esito"].to_dict(),
@@ -394,6 +396,10 @@ def confronto_base_selezione(ds, lato: Lato, modello, lato_sel: Lato, modello_se
     if not (lato.target.index.equals(lato_sel.target.index) and lato.idx_train.equals(lato_sel.idx_train)
             and lato.idx_test.equals(lato_sel.idx_test)):
         raise ValueError("base e selezione devono usare le stesse righe di target, train e test")
+    peso = peso_del_modello(modello_sel)
+    if peso_del_modello(modello) != peso:
+        raise ValueError("modello base e modello con la selezione addestrati con PESO_RENDIMENTO diversi: "
+                         "usa lo stesso interruttore (Avvio)")
     import contextlib
     import io
     tab, auc = {}, {}
@@ -403,25 +409,44 @@ def confronto_base_selezione(ds, lato: Lato, modello, lato_sel: Lato, modello_se
         auc[nome] = {n: float(roc_auc_score(l.y.loc[i], m.predict_proba(l.X.loc[i])[:, 1]))
                      for n, i in (("train", l.idx_train), ("test", l.idx_test))}
     fianco = pd.concat({k: v[["trade", "vincenti_%", "bp_medi_netti"]] for k, v in tab.items()}, axis=1)
+    alta = {k: fascia_alta_meno_tutti(v, n_fasce) for k, v in tab.items()}
     print(f"===== {lato.nome} · test: modello base (riferimento) e modello con la selezione =====")
-    print(f"AUC base      train {auc['base']['train']:.3f}   test {auc['base']['test']:.3f}   "
-          f"({lato.X.shape[1]} colonne)")
-    print(f"AUC selezione train {auc['selezione']['train']:.3f}   test {auc['selezione']['test']:.3f}   "
-          f"({lato_sel.X.shape[1]} colonne)")
+    print(f"PESO_RENDIMENTO = {peso}")
+    for nome, l in (("base", lato), ("selezione", lato_sel)):
+        print(f"AUC {nome:<9} train {auc[nome]['train']:.3f}   test {auc[nome]['test']:.3f}   "
+              f"({l.X.shape[1]} colonne) · fascia {n_fasce} − tutti sul test: {_bp_o_motivo(alta[nome])}")
     print(fianco.to_string())
     registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
-        "tipo": "confronto", **_base_voce(ds, lato, collaudo), "auc": auc,
+        "tipo": "confronto", **_base_voce(ds, lato, collaudo, peso), "auc": auc,
         "colonne": {"base": list(lato.X.columns), "selezione": list(lato_sel.X.columns)},
         "fasce_test": {k: v.reset_index().to_dict(orient="records") for k, v in tab.items()}}, macchina=macchina)
     return fianco
 
 
-def _base_voce(ds, lato, collaudo):
+def fascia_alta_meno_tutti(fasce: pd.DataFrame, n_fasce: int = 5) -> float:
+    """Sul test: bp netti medi della fascia piu' alta meno bp netti medi di tutti i trigger (NaN senza fasce)."""
+    if str(n_fasce) not in fasce.index:
+        return float("nan")
+    return float(fasce.loc[str(n_fasce), "bp_medi_netti"] - fasce.loc["tutti", "bp_medi_netti"])
+
+
+def _bp_o_motivo(x: float) -> str:
+    return "non calcolabile (niente fasce)" if np.isnan(x) else f"{x:+.2f} bp"
+
+
+def _base_voce(ds, lato, collaudo, peso_rendimento):
+    """I campi comuni a ogni voce del registro, compreso l'interruttore PESO_RENDIMENTO (D1)."""
     import collegamento_v4
     from engine.studio import nome_dataset
     return {"collaudo": bool(collaudo), "v4": collegamento_v4.versione(), "ml": registro.versione_ml(),
             "dataset": nome_dataset(ds.symbol, ds.timeframe), "lato": lato.nome, "H": lato.H,
-            "trigger": lato.trigger, "quota_train": lato.quota}
+            "trigger": lato.trigger, "quota_train": lato.quota,
+            "peso_rendimento": None if peso_rendimento is None else bool(peso_rendimento)}
+
+
+def peso_del_modello(modello):
+    """Con quale PESO_RENDIMENTO e' stato addestrato il modello (None se non si sa)."""
+    return getattr(modello, "peso_rendimento_", None)
 
 
 def allena(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = False, parametri=None,
@@ -430,6 +455,9 @@ def allena(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = Fal
     Modello del lato sul solo train (passo 7): AUC, fasce sul test e feature piu'
     usate stampate; una voce «addestramento» nel registro. Ritorna (modello, fasce).
     """
+    if "peso_rendimento" in lato.extra and lato.extra["peso_rendimento"] != bool(peso_rendimento):
+        raise ValueError(f"la selezione di {lato.nome} ha usato PESO_RENDIMENTO = {lato.extra['peso_rendimento']}: "
+                         "il modello con le feature scelte deve usare lo stesso (Avvio)")
     pesi = pesi_unicita(lato.idx_train, ds.df, lato.H) if con_unicita else None
     parametri = parametri or PARAMETRI_BASE
     modello = addestra(lato.X, lato.y, lato.idx_train, lato.idx_test, parametri=parametri, pesi=pesi,
@@ -443,7 +471,7 @@ def allena(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = Fal
     auc = {n: float(roc_auc_score(lato.y.loc[i], modello.predict_proba(lato.X.loc[i])[:, 1]))
            for n, i in (("train", lato.idx_train), ("test", lato.idx_test))}
     registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
-        "tipo": "addestramento", **_base_voce(ds, lato, collaudo),
+        "tipo": "addestramento", **_base_voce(ds, lato, collaudo, peso_rendimento),
         "colonne_X": list(lato.X.columns), "pesi": {"unicita": con_unicita, "rendimento": peso_rendimento},
         "parametri": parametri, "semi": {"lightgbm": parametri.get("random_state")},
         "righe": {"train": len(lato.idx_train), "test": len(lato.idx_test)},
@@ -539,7 +567,7 @@ def guarda_oos(ds, lato: Lato, modello, fasce=5, n_fasce: int = 5, collaudo: boo
                      n_fasce=n_fasce, solo_tutti=solo)
     print(tab.to_string())
     registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
-        "tipo": "oos", "cosa": "tabella", **_base_voce(ds, lato, collaudo), "fasce": fasce,
+        "tipo": "oos", "cosa": "tabella", **_base_voce(ds, lato, collaudo, peso_del_modello(modello)), "fasce": fasce,
         "solo_tutti": bool(solo or len(tab) == 2),
         "risultato": tab.reset_index().to_dict(orient="records")}, macchina=macchina)
     return tab
@@ -583,7 +611,8 @@ def backtest(ds, lati: dict, modelli: dict, fasce=5, n_fasce: int = 5, collaudo:
             risultati["modello"]["trade"][l] = vuoto
     for d, lato in lati.items():
         registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
-            "tipo": "oos", "cosa": "backtest", **_base_voce(ds, lato, collaudo), "fasce": fasce,
+            "tipo": "oos", "cosa": "backtest", **_base_voce(ds, lato, collaudo, peso_del_modello(modelli[d])),
+            "fasce": fasce,
             "solo_tutti": lato.nome in senza_modello,
             "risultato": tab.xs(lato.nome, level="lato").reset_index().to_dict(orient="records")},
             macchina=macchina)

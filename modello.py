@@ -90,6 +90,7 @@ def addestra(X, y, idx_train, idx_test, parametri=None, pesi=None,
         sw = sw / sw.mean()
     modello = LGBMClassifier(**(parametri or PARAMETRI_BASE))
     modello.fit(X.loc[idx_train], y.loc[idx_train], sample_weight=sw)
+    modello.peso_rendimento_ = bool(peso_rendimento)      # per il registro e per il controllo di coerenza
     return modello
 
 
