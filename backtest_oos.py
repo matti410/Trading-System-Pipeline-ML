@@ -7,8 +7,9 @@ Backtest OOS dei trigger selezionati dal modello, sul motore veloce di V4 (D5, 3
       -> DataFrame dei trade del motore, con lordo_bp, netto_bp e la barra del trigger
   esegui_backtest(df, segnali_long, segnali_short, H_long, H_short, costi)
       -> dict con i trade LONG, SHORT, COMBINATO e i segnali saltati
-  tabella_metriche({"nome": risultato, ...}) -> DataFrame
-  grafico_equity({"nome": risultato, ...})
+  tabella_metriche({"nome": risultato, ...}, inizio, fine, buy_hold=None) -> DataFrame
+  curva_buy_hold(df_periodo, costo_bp) -> bp del buy & hold, barra per barra
+  grafico_equity({"nome": risultato, ...}, tabella=None, buy_hold=None)
 
 REGOLE: le stesse del Lab e del target
   - MotoreVeloce di V4 (engine/motore_veloce.py), exclusive_orders=True: un
@@ -31,6 +32,13 @@ compensazione). Il COMBINATO e' l'unione dei trade dei due lati, ordinata per
 ora d'uscita: trade, vincenti, trade medio e profit factor sui trade uniti;
 curva = somma cumulata dei bp di tutti i trade; max drawdown su quella curva;
 esposizione = quota di barre con almeno un lato aperto.
+
+BUY & HOLD (riferimento nel grafico e nella tabella): sempre in posizione long
+dal primo Open del periodo, nelle stesse unita' delle curve (bp a capitale
+fisso, senza reinvestire): (Close(t) / Open della prima barra - 1) x 10.000,
+meno il costo di un'entrata e un'uscita (dataset.costo_bp()). Il buy & hold di
+V4 (engine/equity_plot.py) non si usa: e' in capitale (cash x Close/Close
+iniziale), parte dal Close e non toglie costi.
 """
 import matplotlib.pyplot as plt
 import numpy as np
@@ -40,6 +48,8 @@ from oos import soglia_dal_test
 
 COLORE_MODELLO = "#2a78d6"
 COLORE_TUTTI = "#8a8a85"
+COLORE_BUY_HOLD = "#3d3d3a"
+ETICHETTA_BUY_HOLD = "buy & hold (sempre in posizione)"
 
 
 def trigger_in_fascia(modello, X, idx_test, idx_oos, fasce=5, n_fasce=5):
@@ -132,29 +142,58 @@ def _metriche(trades, saltati, inizio, fine):
     }
 
 
-def tabella_metriche(risultati, inizio_bar, fine_bar):
+def curva_buy_hold(df_periodo, costo_bp: float) -> pd.Series:
+    """Il buy & hold sul periodo, in bp a capitale fisso: (Close / primo Open - 1) x 1e4 - costo."""
+    return (df_periodo["Close"] / float(df_periodo["Open"].iloc[0]) - 1) * 10_000 - float(costo_bp)
+
+
+def _max_dd(curva):
+    """Max drawdown in bp di una curva cumulata, partendo da 0 (come per i trade)."""
+    curva = np.asarray(curva, dtype=float)
+    if not len(curva):
+        return 0.0
+    picchi = np.maximum.accumulate(np.r_[0.0, curva])[1:]
+    return float((picchi - curva).max())
+
+
+def tabella_metriche(risultati, inizio_bar, fine_bar, buy_hold=None):
     """
     Una riga per lato e scenario. inizio_bar / fine_bar: posizioni nel df del
     periodo (per l'esposizione), es. la prima barra OOS e len(df).
+    buy_hold (curva_buy_hold): aggiunge la riga («COMBINATO», «buy & hold») con
+    totale e max drawdown in bp sulla stessa curva.
     """
     righe = {}
     for nome, r in risultati.items():
         for lato in ("LONG", "SHORT", "COMBINATO"):
             righe[(lato, nome)] = _metriche(r["trade"][lato], r["saltati"][lato], inizio_bar, fine_bar)
+    if buy_hold is not None:
+        righe[("COMBINATO", "buy & hold")] = {"totale_bp": float(buy_hold.iloc[-1]), "max_dd_bp": _max_dd(buy_hold)}
     tab = pd.DataFrame(righe).T
     tab.index.names = ["lato", "scenario"]
     return tab.astype(float).round(2)
 
 
-def grafico_equity(risultati):
+def grafico_equity(risultati, tabella=None, buy_hold=None):
+    """
+    Le curve dei bp netti cumulati per LONG, SHORT e COMBINATO. tabella (tabella_metriche):
+    l'esposizione di ogni scenario nella legenda. buy_hold (curva_buy_hold): la linea del
+    buy & hold in tutti e tre i pannelli.
+    """
     colori = [COLORE_MODELLO, COLORE_TUTTI]
     fig, assi = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
     for ax, lato in zip(assi, ("LONG", "SHORT", "COMBINATO")):
         for (nome, r), colore in zip(risultati.items(), colori):
             t = r["trade"][lato]
             if len(t):
+                etichetta = nome
+                if tabella is not None and (lato, nome) in tabella.index:
+                    etichetta = f"{nome} (in posizione {tabella.loc[(lato, nome), 'esposizione_%']:.1f}% del tempo)"
                 ax.plot(pd.DatetimeIndex(t["ExitTime"]), t["netto_bp"].astype(float).cumsum(), color=colore,
-                        lw=2 if colore == COLORE_MODELLO else 1.5, label=nome)
+                        lw=2 if colore == COLORE_MODELLO else 1.5, label=etichetta)
+        if buy_hold is not None:
+            ax.plot(buy_hold.index, buy_hold.to_numpy(dtype=float), color=COLORE_BUY_HOLD, ls="--", lw=1.2,
+                    label=ETICHETTA_BUY_HOLD)
         ax.axhline(0, color="#b5b5b0", lw=1, ls=":")
         ax.set_title(lato, loc="left", fontsize=11)
         ax.set_ylabel("bp netti cumulati")

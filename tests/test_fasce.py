@@ -86,7 +86,7 @@ def test_lato_senza_feature_passi_8_e_9(ds_vero, tmp_path, capsys):
     oos = pipeline.guarda_oos(ds, lato_sel, modello, collaudo=True)
     assert list(oos.index) == ["test tutti", "OOS tutti"]
     tab_bt, ris = pipeline.backtest(ds, {-1: lato_sel}, {-1: modello}, collaudo=True)
-    assert set(tab_bt.index.get_level_values("scenario")) == {"tutti i trigger"}
+    assert set(tab_bt.index.get_level_values("scenario")) == {"tutti i trigger", "buy & hold"}
     assert "modello" not in ris
     uscita = capsys.readouterr().out
     assert uscita.count(frase) >= 4                                    # soglia, confronti, OOS, backtest

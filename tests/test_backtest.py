@@ -80,3 +80,57 @@ def test_vectorbt_tolto():
     assert "vectorbt" not in sys.modules
     for f in radice.glob("*.py"):
         assert "vectorbt" not in f.read_text(encoding="utf-8"), f.name
+
+
+def _bh_inventato():
+    idx = pd.date_range("2025-01-01", periods=50, freq="15min", tz="UTC")
+    close = pd.Series(100 + np.cumsum(np.sin(np.arange(50))), index=idx)
+    return pd.DataFrame({"Open": close.shift(1).fillna(99.5), "High": close + 1, "Low": close - 1, "Close": close})
+
+
+def test_buy_hold(v4, monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from backtest_oos import ETICHETTA_BUY_HOLD, curva_buy_hold, grafico_equity
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+    df = _bh_inventato()
+    periodo = df.iloc[10:]
+    costo = 10.03
+    bh = curva_buy_hold(periodo, costo)
+    atteso = (periodo["Close"] / periodo["Open"].iloc[0] - 1) * 1e4 - costo
+    np.testing.assert_allclose(bh.to_numpy(), atteso.to_numpy())
+    assert bh.index.equals(periodo.index)
+    # tabella: la riga del buy & hold per il COMBINATO, totale e max drawdown sulla stessa curva
+    vuoto = pd.DataFrame(columns=["EntryBar", "ExitBar", "ExitTime", "netto_bp", "lordo_bp"])
+    tr = pd.DataFrame({"EntryBar": [12, 20], "ExitBar": [15, 30], "ExitTime": df.index[[15, 30]],
+                       "netto_bp": [5.0, -3.0], "lordo_bp": [15.0, 7.0]})
+    ris = {"modello": {"trade": {"LONG": tr, "SHORT": vuoto, "COMBINATO": tr},
+                       "saltati": {"LONG": 0, "SHORT": 0, "COMBINATO": 0}}}
+    tab = tabella_metriche(ris, 10, 50, buy_hold=bh)
+    riga = tab.loc[("COMBINATO", "buy & hold")]
+    assert riga["totale_bp"] == round(float(atteso.iloc[-1]), 2)
+    curva = atteso.to_numpy()
+    dd = (np.maximum.accumulate(np.r_[0.0, curva])[1:] - curva).max()
+    assert riga["max_dd_bp"] == round(float(dd), 2)
+    assert ("LONG", "buy & hold") not in tab.index and ("SHORT", "buy & hold") not in tab.index
+    # grafico: la linea in tutti e tre i pannelli, la legenda con l'esposizione
+    fig = grafico_equity(ris, tabella=tab, buy_hold=bh)
+    for ax in fig.axes:
+        linee = [l for l in ax.get_lines() if l.get_label() == ETICHETTA_BUY_HOLD]
+        assert len(linee) == 1 and linee[0].get_linestyle() == "--"
+        np.testing.assert_allclose(linee[0].get_ydata(), atteso.to_numpy())
+    legenda = [t.get_text() for t in fig.axes[0].get_legend().get_texts()]
+    espo = tab.loc[("LONG", "modello"), "esposizione_%"]
+    assert f"modello (in posizione {espo:.1f}% del tempo)" in legenda
+    assert ETICHETTA_BUY_HOLD in [t.get_text() for t in fig.axes[1].get_legend().get_texts()]   # SHORT vuoto: solo B&H
+    plt.close("all")
+
+
+def test_buy_hold_oos_del_dataset(ds_vero):
+    import pipeline
+    bh = pipeline.buy_hold_oos(ds_vero)
+    oos = ds_vero.df.iloc[len(ds_vero.df_is):]
+    assert bh.index.equals(oos.index)
+    primo = (oos["Close"].iloc[0] / oos["Open"].iloc[0] - 1) * 1e4 - ds_vero.costo_bp()["totale_bp"]
+    assert np.isclose(bh.iloc[0], primo)
