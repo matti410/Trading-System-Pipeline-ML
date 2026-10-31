@@ -41,7 +41,7 @@ def potenza():
         tenuta, auc, rumore_passato = [], [], 0
         for seme in SEMI:
             X, y, df, ti = caso(forza, seme)
-            sel = S.selezione(X, y, df, ti, df.index[-1], H, sempre=["E1_TRIG"], con_unicita=False)
+            sel = S.selezione(X, y, df, ti, df.index[-1], H, sempre=["E1_TRIG"], con_unicita=False, peso_rendimento=False)
             tenuta.append("vera" in sel.tenute)
             rumore_passato += sum(t.startswith("rumore_") for t in sel.tenute)
             giri = S.blocchi_interni(ti, df, H, df.index[-1])

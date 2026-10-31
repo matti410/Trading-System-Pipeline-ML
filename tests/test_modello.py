@@ -51,10 +51,10 @@ def _dati_modello(n=600, seme=0):
     return X, y, netto, idx[:400], idx[400:]
 
 
-def test_interruttore_pesi_rendimento_spento_di_default():
+def test_interruttore_pesi_rendimento():
     X, y, netto, tr, te = _dati_modello()
-    base = addestra(X, y, tr, te)
-    spento = addestra(X, y, tr, te, netto_bp=netto)                     # netto passato ma interruttore spento
+    base = addestra(X, y, tr, te, peso_rendimento=False)
+    spento = addestra(X, y, tr, te, peso_rendimento=False, netto_bp=netto)  # netto passato ma interruttore spento
     acceso = addestra(X, y, tr, te, peso_rendimento=True, netto_bp=netto)
     p_base, p_spento, p_acceso = (m.predict_proba(X.loc[te])[:, 1] for m in (base, spento, acceso))
     assert np.array_equal(p_base, p_spento)
