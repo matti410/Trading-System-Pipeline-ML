@@ -222,3 +222,80 @@ def test_passo3_nessuno_da_mostrare(capsys):
     assert len(plt.get_fignums()) == n_figure                               # nessun grafico vuoto
     assert "nessuna curva" in capsys.readouterr().out
     assert pipeline.riga_mostrati(conti, 10).startswith("nessun trigger mostrato")
+
+
+def test_passo3_costo_e_picco_netto(monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+    ev = _ev_inventato()
+    costo = 10.03
+    tutta = pipeline.sintesi_event_study(ev, "M15", costo_bp=costo)
+    assert list(tutta.columns).index("picco_netto_bp") == list(tutta.columns).index("picco_pct") + 1
+    np.testing.assert_allclose(tutta["picco_netto_bp"], tutta["picco_pct"] * 100 - costo)
+    # ordinamento e filtro invariati
+    senza = pipeline.sintesi_event_study(ev, "M15")
+    assert list(pipeline.sintesi_da_mostrare(tutta, 6)[0]["candidato"]) == \
+        list(pipeline.sintesi_da_mostrare(senza, 6)[0]["candidato"])
+    vista, _ = pipeline.sintesi_da_mostrare(tutta, 6)
+    pipeline.grafico_event_study(ev, candidati=list(vista["candidato"]), costo_bp=costo)
+    ax = plt.gcf().axes[0]
+    legenda = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert any(e.startswith("costo di un trade (10.03 bp") for e in legenda)
+    linea = [l for l in ax.get_lines() if l.get_label().startswith("costo di un trade")][0]
+    assert linea.get_linestyle() == "--" and np.allclose(linea.get_ydata(), costo / 100)   # in %, come l'asse
+    assert sum(e.endswith("nel train)") for e in legenda) == 6                         # le curve, invariate
+    plt.close("all")
+
+
+def test_tabella_trigger_solo_train(ds_vero):
+    trig = ds_vero.trigger_long[:2]
+    lato = pipeline.prepara_lato(ds_vero, 1, trig, 16)
+    tab = pipeline.tabella_trigger_train(lato)
+    assert list(tab.index) == trig + ["tutti"]
+    assert list(tab.columns) == ["occorrenze", "bp_lordi_medi", "bp_netti_medi", "classe_1_%"]
+    t = lato.target.loc[lato.idx_train]
+    assert tab.loc["tutti", "occorrenze"] == len(lato.idx_train)
+    assert np.isclose(tab.loc["tutti", "bp_netti_medi"], t["netto_bp"].mean())
+    uno = lato.X.loc[lato.idx_train, trig[0]].astype(bool)
+    assert tab.loc[trig[0], "occorrenze"] == int(uno.sum())
+    assert np.isclose(tab.loc[trig[0], "classe_1_%"], 100 * t.loc[uno, "TARGET"].mean())
+    # cambiare il test (e l'OOS) non cambia la tabella
+    fuori = lato.target.index.difference(lato.idx_train)
+    target = lato.target.copy()
+    target.loc[fuori, ["lordo_bp", "netto_bp"]] = 9999.0
+    target.loc[fuori, "TARGET"] = 1
+    X = lato.X.copy()
+    X.loc[fuori, trig] = 1
+    altro = dataclasses.replace(lato, target=target, X=X)
+    pd.testing.assert_frame_equal(pipeline.tabella_trigger_train(altro), tab)
+    assert "conta per entrambi" in pipeline.NOTA_TRIGGER_INSIEME
+
+
+def _cella_passo_9():
+    import json
+    from pathlib import Path
+    nb = json.loads((Path(__file__).resolve().parent.parent / "TS-Pipeline-ML.ipynb").read_text(encoding="utf-8"))
+    celle = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    return [c for c in celle if "pipeline.backtest(" in c][0]
+
+
+def test_guarda_oos_spento(v4, tmp_path, monkeypatch, capsys):
+    import registro
+
+    def vietato(*a, **k):
+        raise AssertionError("con GUARDA_OOS = False non si guarda l'OOS")
+    monkeypatch.setattr(pipeline, "guarda_oos", vietato)
+    monkeypatch.setattr(pipeline, "backtest", vietato)
+    ds = SimpleNamespace(cartella=str(tmp_path), symbol="BINANCE_PERP_BTCUSDT", timeframe="M15")
+    g = {"pipeline": pipeline, "registro": registro, "ds": ds, "GUARDA_OOS": False, "lati_sel": {1: object()},
+         "modelli": {1: object()}, "FASCE_OPERATIVE": 5, "COLLAUDO": True, "display": print}
+    exec(_cella_passo_9(), g)
+    uscita = capsys.readouterr().out
+    assert "OOS non guardato: metti GUARDA_OOS = True quando la scelta è fatta" in uscita
+    assert "tab_bt" not in g
+    assert not any('"oos"' in f.read_text(encoding="utf-8") for f in tmp_path.rglob("*.jsonl"))
+    # solo True apre l'OOS (nemmeno un valore «vero» qualunque)
+    assert pipeline.oos_permesso(True) is True
+    assert pipeline.oos_permesso(1) is False and pipeline.oos_permesso("True") is False

@@ -105,16 +105,19 @@ def occorrenze_train(ev) -> dict:
     return conta
 
 
-def sintesi_event_study(ev, timeframe: str) -> pd.DataFrame:
+def sintesi_event_study(ev, timeframe: str, costo_bp=None) -> pd.DataFrame:
     """
     La sintesi di V4, nell'ordine di V4, con le ore accanto alla barra del picco e un segno
     sui trigger con meno occorrenze nel train del minimo del Lab. Non toglie nessun trigger.
+    costo_bp (dataset.costo_bp()["totale_bp"]): aggiunge picco_netto_bp = picco in bp - costo.
     """
     from engine.vetrina import MIN_TRIGGER
     colonne = ["candidato", "trades", "barra_picco", "picco_pct", "incertezza_pct", "volte_incertezza",
                "oltre_rumore", "a_fine_pct", "vs_mercato_pct"]
     s = ev.sintesi[[c for c in colonne if c in ev.sintesi.columns]].copy()
     s.insert(s.columns.get_loc("barra_picco") + 1, "ore_picco", [ore(b, timeframe) for b in s["barra_picco"]])
+    if costo_bp is not None:
+        s.insert(s.columns.get_loc("picco_pct") + 1, "picco_netto_bp", s["picco_pct"] * 100 - float(costo_bp))
     senza = [c for c in getattr(ev, "candidati_richiesti", []) if c not in set(s["candidato"])]
     if senza:
         s = pd.concat([s, pd.DataFrame({"candidato": senza, "trades": 0})], ignore_index=True)
@@ -155,11 +158,34 @@ def riga_mostrati(conteggi: dict, n_mostra: int = 10) -> str:
     return f"mostrati {c['mostrati']} di {c['totale']} trigger ({motivi})"
 
 
-def grafico_event_study(ev, titolo: str = "", candidati=None):
+def _plot_con_costo(copia, nomi, costo_bp):
+    """Il grafico di V4, con la linea tratteggiata al costo di un trade (in %, come l'asse)."""
+    import matplotlib.pyplot as plt
+    if costo_bp is None:
+        copia.plot(candidati=nomi, figsize=(13, 7.5))       # il grafico di V4: si mostra da se'
+        return
+    mostra = plt.show
+    plt.show = lambda *a, **k: None                          # V4 chiama plt.show: la linea va aggiunta prima
+    try:
+        copia.plot(candidati=nomi, figsize=(13, 7.5))
+    finally:
+        plt.show = mostra
+    ax = plt.gcf().axes[0]
+    ax.axhline(float(costo_bp) / 100, color=COLORE_COSTO, ls="--", lw=1.2,
+               label=f"costo di un trade ({float(costo_bp):.2f} bp: commissione andata e ritorno + spread)")
+    ax.legend(fontsize=8, loc="best")
+    plt.show()
+
+
+COLORE_COSTO = "#c0392b"
+
+
+def grafico_event_study(ev, titolo: str = "", candidati=None, costo_bp=None):
     """
     Le curve dell'event study con il grafico di V4 (EventStudy.plot), con le occorrenze nel
     train accanto al nome (nella legenda). candidati=None: TUTTI i trigger misurati; una lista:
-    solo quei trigger (piu' la curva del mercato, che V4 disegna sempre). Ritorna le etichette.
+    solo quei trigger (piu' la curva del mercato, che V4 disegna sempre). costo_bp: una linea
+    orizzontale tratteggiata al costo di un trade. Ritorna le etichette.
     """
     import copy
     n = occorrenze_train(ev)
@@ -173,7 +199,7 @@ def grafico_event_study(ev, titolo: str = "", candidati=None):
         if titolo:
             print(titolo)
         if nomi:
-            copia.plot(candidati=nomi, figsize=(13, 7.5))
+            _plot_con_costo(copia, nomi, costo_bp)
         else:
             print("nessuna curva da disegnare: nessun trigger da mostrare.")
         return nomi
@@ -182,7 +208,7 @@ def grafico_event_study(ev, titolo: str = "", candidati=None):
              if c not in ev.curve.columns or ev.curve[c].isna().all()]
     if titolo:
         print(titolo)
-    copia.plot(candidati=nomi, figsize=(13, 7.5))       # il grafico di V4: si mostra da se'
+    _plot_con_costo(copia, nomi, costo_bp)
     if senza:
         print(f"senza curva (nessuna occorrenza nel train): {', '.join(senza)}")
     return nomi + [f"{c} (0 nel train, senza curva)" for c in senza if c not in ev.curve.columns]
@@ -298,6 +324,29 @@ def prepara_lato(ds, direzione: int, trigger, H: int, quota: float = 0.8, feat=N
     X = costruisci_X(ds.df, target, list(trigger), ds.filtri)
     return Lato(direzione=direzione, trigger=list(trigger), H=int(H), target=target, idx_train=idx_train,
                 idx_test=idx_test, idx_oos=indici_oos(target, ds.df_is), X=X, quota=quota, extra=extra)
+
+
+NOTA_TRIGGER_INSIEME = ("Un trigger che scatta insieme a un altro conta per entrambi: la somma delle "
+                        "occorrenze può superare la riga «tutti».")
+
+
+def tabella_trigger_train(lato: Lato) -> pd.DataFrame:
+    """
+    Passo 5: per ogni trigger scelto, SOLO sulle righe di train del target: occorrenze, bp lordi
+    medi, bp netti medi, % classe 1; piu' la riga «tutti». Un trigger che scatta insieme a un
+    altro conta per entrambi (NOTA_TRIGGER_INSIEME).
+    """
+    t = lato.target.loc[lato.idx_train]
+    X = lato.X.loc[lato.idx_train]
+
+    def riga(r):
+        return {"occorrenze": len(r), "bp_lordi_medi": r["lordo_bp"].mean(), "bp_netti_medi": r["netto_bp"].mean(),
+                "classe_1_%": 100 * r["TARGET"].mean()}
+    righe = {trig: riga(t[X[trig].astype(bool)]) for trig in lato.trigger}
+    righe["tutti"] = riga(t)
+    tab = pd.DataFrame(righe).T
+    tab.index.name = f"{lato.nome} · train"
+    return tab.astype({"occorrenze": int})
 
 
 def seleziona_lato(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = False, seme: int = 0,
@@ -462,6 +511,21 @@ def confronti(ds, lato: Lato, modello, fasce=5, n_fasce: int = 5, min_trade: int
     return tab, percentile
 
 
+MESSAGGIO_OOS_CHIUSO = "OOS non guardato: metti GUARDA_OOS = True quando la scelta è fatta"
+
+
+def oos_permesso(guarda: bool) -> bool:
+    """
+    L'interruttore GUARDA_OOS (in cima al notebook). False: il passo 9 non gira, niente OOS,
+    niente backtest e nessuno sguardo all'OOS nel registro; si stampa il motivo.
+    """
+    if guarda is True:
+        return True
+    riga = "=" * 78
+    print(f"{riga}\n{MESSAGGIO_OOS_CHIUSO}.\nIl notebook si ferma qui: nessuno sguardo all'OOS nel registro.\n{riga}")
+    return False
+
+
 def guarda_oos(ds, lato: Lato, modello, fasce=5, n_fasce: int = 5, collaudo: bool = False, macchina=None):
     """
     La tabella OOS con la soglia dal test (passo 9). Si registra come sguardo all'OOS.
@@ -479,6 +543,12 @@ def guarda_oos(ds, lato: Lato, modello, fasce=5, n_fasce: int = 5, collaudo: boo
         "solo_tutti": bool(solo or len(tab) == 2),
         "risultato": tab.reset_index().to_dict(orient="records")}, macchina=macchina)
     return tab
+
+
+def buy_hold_oos(ds) -> pd.Series:
+    """Il buy & hold sull'OOS del backtest (dalla prima barra OOS alla fine), in bp, meno il costo di un trade."""
+    from backtest_oos import curva_buy_hold
+    return curva_buy_hold(ds.df.iloc[len(ds.df_is):], ds.costo_bp()["totale_bp"])
 
 
 def backtest(ds, lati: dict, modelli: dict, fasce=5, n_fasce: int = 5, collaudo: bool = False, macchina=None):
@@ -504,7 +574,7 @@ def backtest(ds, lati: dict, modelli: dict, fasce=5, n_fasce: int = 5, collaudo:
     risultati = {nome: esegui_backtest(ds.df, s.get(1), s.get(-1), H[1], H[-1], ds.costi)
                  for nome, s in segnali.items()}
     inizio = len(ds.df_is)
-    tab = tabella_metriche(risultati, inizio, len(ds.df))
+    tab = tabella_metriche(risultati, inizio, len(ds.df), buy_hold=buy_hold_oos(ds))
     if "modello" in risultati and senza_modello:
         via = [(l, "modello") for l in senza_modello + ["COMBINATO"]]
         tab = tab.drop(index=[v for v in via if v in tab.index])
