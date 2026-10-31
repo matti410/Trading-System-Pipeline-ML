@@ -140,3 +140,59 @@ def test_trigger_raro_visibile_e_avviso(ds_vero, capsys, monkeypatch):
 
 def test_event_study_senza_minimo():
     assert pipeline.MIN_TRADES_EVENT_STUDY == 0
+
+
+def _ev_inventato():
+    """Un EventStudy di V4 con una sintesi inventata: 13 trigger con curva e uno senza occorrenze."""
+    from engine.event_study import EventStudy
+    picchi = {"A_OLTRE_1": (0.30, True), "B_OLTRE_2": (0.10, True), "C_OLTRE_3": (0.50, True),
+              "D_OLTRE_NEG": (-0.40, True), "E_SOTTO_1": (0.90, False), "F_SOTTO_2": (0.05, False),
+              "G_SOTTO_NEG": (-0.10, False), "H_ZERO": (0.0, False)}
+    picchi.update({f"R_SOTTO_{i}": (0.01 * i, False) for i in range(1, 6)})
+    nomi = list(picchi)
+    sintesi = pd.DataFrame({"candidato": nomi, "direction": 1, "trades": [300] * len(nomi), "barra_picco": 4,
+                            "picco_pct": [p for p, _ in picchi.values()], "incertezza_pct": 0.1,
+                            "volte_incertezza": 1.0, "oltre_rumore": [o for _, o in picchi.values()],
+                            "a_fine_pct": 0.0, "vs_mercato_pct": 0.0})
+    curve = pd.DataFrame({n: np.linspace(0, p, 9) for n, (p, _) in picchi.items()})
+    ev = EventStudy(curve, curve * 0, curve, curve, curve * 0 + 0.1, sintesi, 8, (10, 90), 1.0, 1.0, [])
+    ev.candidati_richiesti = nomi + ["Z_MAI"]
+    return ev
+
+
+def test_passo3_solo_i_migliori(monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+    ev = _ev_inventato()
+    tutta = pipeline.sintesi_event_study(ev, "M15")
+    assert len(tutta) == 14                                                  # la sintesi completa resta intera
+    vista, conti = pipeline.sintesi_da_mostrare(tutta, 6)
+    # oltre il rumore per picco decrescente, poi gli altri per picco decrescente; picchi <= 0 esclusi
+    assert list(vista["candidato"]) == ["C_OLTRE_3", "A_OLTRE_1", "B_OLTRE_2", "E_SOTTO_1", "F_SOTTO_2", "R_SOTTO_5"]
+    assert list(vista.columns) == list(tutta.columns)                        # le colonne di oggi, tutte
+    assert conti == {"mostrati": 6, "totale": 14, "picco_non_positivo": 3, "oltre_i_primi": 4, "senza_curva": 1}
+    assert len(pipeline.sintesi_da_mostrare(tutta, 10)[0]) == 10
+    assert len(pipeline.sintesi_da_mostrare(tutta, 99)[0]) == 10            # solo i 10 con picco > 0
+    # il grafico contiene solo quei nomi, piu' il mercato
+    pipeline.grafico_event_study(ev, candidati=list(vista["candidato"]))
+    legenda = [t.get_text() for t in plt.gcf().axes[0].get_legend().get_texts()]
+    assert legenda == [f"{c} (300 nel train)" for c in vista["candidato"]] + ["mercato (tutte le barre)"]
+    plt.close("all")
+    riga = pipeline.riga_mostrati(conti, 6)
+    assert riga.startswith("mostrati 6 di 14 trigger (3 con picco ≤ 0, 4 oltre i primi 6")
+
+
+def test_passo3_nessuno_da_mostrare(capsys):
+    import matplotlib.pyplot as plt
+    ev = _ev_inventato()
+    tutta = pipeline.sintesi_event_study(ev, "M15")
+    tutta["picco_pct"] = -tutta["picco_pct"].abs()
+    vista, conti = pipeline.sintesi_da_mostrare(tutta, 10)
+    assert len(vista) == 0 and conti["mostrati"] == 0
+    n_figure = len(plt.get_fignums())
+    assert pipeline.grafico_event_study(ev, candidati=[]) == []
+    assert len(plt.get_fignums()) == n_figure                               # nessun grafico vuoto
+    assert "nessuna curva" in capsys.readouterr().out
+    assert pipeline.riga_mostrati(conti, 10).startswith("nessun trigger mostrato")
