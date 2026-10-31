@@ -9,7 +9,7 @@ Funzioni:
       -> Series: guadagno NETTO di ogni trigger (frazione), dal target
 
   addestra(X, y, idx_train, idx_test, parametri=None, pesi=None,
-           peso_rendimento=False, netto_bp=None)
+           peso_rendimento=True, netto_bp=None)
       -> modello LightGBM addestrato solo sulle righe di train
 
   valuta(modello, X, y, rend, idx_train, idx_test)
@@ -30,6 +30,7 @@ import pandas as pd
 from lightgbm import LGBMClassifier
 from sklearn.metrics import roc_auc_score
 
+from oos import piu_meno_bp
 from pesi import pesi_rendimento
 
 # impostazioni prudenti, NON ottimizzate (primo giro = modello di base)
@@ -64,14 +65,14 @@ def _controlla_split(idx_train, idx_test):
 
 
 def addestra(X, y, idx_train, idx_test, parametri=None, pesi=None,
-             peso_rendimento=False, netto_bp=None):
+             peso_rendimento=True, netto_bp=None):
     """
     Addestra LightGBM SOLO sulle righe idx_train. idx_test serve solo al
     controllo: se il train non viene tutto prima del test, si ferma.
 
     pesi            : None (modello senza pesi) oppure Series da
                       pesi.pesi_unicita(idx_train, ...), indicizzata su idx_train.
-    peso_rendimento : interruttore D1, SPENTO di default. Acceso, ogni riga pesa
+    peso_rendimento : interruttore D1, ACCESO di default (decisione di Mattia del 31/10/2026). Ogni riga pesa
                       anche min(|netto_bp|, 95° percentile del train)
                       (pesi.pesi_rendimento): peso = unicita' x rendimento,
                       riportato a media 1. Serve netto_bp (la colonna del target).
@@ -128,17 +129,55 @@ def valuta(modello, X, y, rend, idx_train, idx_test, n_fasce=5):
               f"meno delle {n_fasce} fasce. Si mostra solo «tutti».")
         t["fascia"] = "tutti"
     else:
-        # rank 'first' -> fasce di uguale numerosita' anche con probabilita' identiche
-        t["fascia"] = pd.qcut(t["p"].rank(method="first"), n_fasce, labels=range(1, n_fasce + 1))
+        t["fascia"] = _etichette_fasce(t["p"], n_fasce)
     for f, g in (t.groupby("fascia", observed=True) if distinti >= n_fasce else []):
         righe.append({"fascia": str(f), "prob_da": g.p.min(), "prob_a": g.p.max(),
                       "trade": len(g), "vincenti_%": 100 * g.y.mean(),
-                      "bp_medi_netti": g.bp.mean()})
+                      "bp_medi_netti": g.bp.mean(), "±bp": piu_meno_bp(g.bp)})
     righe.append({"fascia": "tutti", "prob_da": t.p.min(), "prob_a": t.p.max(),
                   "trade": len(t), "vincenti_%": 100 * t.y.mean(),
-                  "bp_medi_netti": t.bp.mean()})
+                  "bp_medi_netti": t.bp.mean(), "±bp": piu_meno_bp(t.bp)})
     return pd.DataFrame(righe).set_index("fascia").round(
-        {"prob_da": 3, "prob_a": 3, "vincenti_%": 1, "bp_medi_netti": 2})
+        {"prob_da": 3, "prob_a": 3, "vincenti_%": 1, "bp_medi_netti": 2, "±bp": 2})
+
+
+def _etichette_fasce(p: pd.Series, n_fasce: int):
+    """Le fasce del test: rank 'first' -> fasce di uguale numerosita' anche con probabilita' identiche."""
+    return pd.qcut(p.rank(method="first"), n_fasce, labels=range(1, n_fasce + 1))
+
+
+def differenza_con_incertezza(bp_alta, bp_tutti) -> tuple:
+    """
+    bp medi della fascia alta meno bp medi di tutti, con il suo ± (circa 2 errori standard).
+    La fascia e' DENTRO «tutti», quindi i due non sono indipendenti: la differenza e'
+    (1 - n_a/N) x (media della fascia - media degli altri), e il ± viene da qui:
+    2 x radice((1 - n_a/N)^2 x (s_a^2/n_a + s_altri^2/n_altri)). Ritorna (differenza, ±).
+    """
+    alta, tutti = np.asarray(bp_alta, dtype=float), np.asarray(bp_tutti, dtype=float)
+    n_a, n = len(alta), len(tutti)
+    somma_altri = tutti.sum() - alta.sum()
+    q_altri = (tutti ** 2).sum() - (alta ** 2).sum()
+    n_r = n - n_a
+    diff = alta.mean() - tutti.mean()
+    if n_a < 2 or n_r < 2:
+        return float(diff), float("nan")
+    media_r = somma_altri / n_r
+    var_r = max((q_altri - n_r * media_r ** 2) / (n_r - 1), 0.0)
+    f = 1 - n_a / n
+    return float(diff), float(2 * np.sqrt(f ** 2 * (np.var(alta, ddof=1) / n_a + var_r / n_r)))
+
+
+def fascia_alta_contro_tutti(modello, X, rend, idx_test, n_fasce=5):
+    """
+    Sul test: (differenza, ±) fra i bp netti medi della fascia piu' alta e quelli di tutti i
+    trigger, con le stesse fasce di valuta. (NaN, NaN) se le fasce non si calcolano.
+    """
+    p = pd.Series(modello.predict_proba(X.loc[idx_test])[:, 1], index=idx_test)
+    if len(np.unique(p)) < n_fasce:
+        return float("nan"), float("nan")
+    bp = rend.loc[idx_test].to_numpy() * 1e4
+    alta = (_etichette_fasce(p, n_fasce) == n_fasce).to_numpy()
+    return differenza_con_incertezza(bp[alta], bp)
 
 
 def importanza(modello, X):

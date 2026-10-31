@@ -16,7 +16,7 @@ mai usati per scegliere.
 import numpy as np
 import pandas as pd
 
-from oos import soglia_dal_test
+from oos import piu_meno_bp, soglia_dal_test
 
 
 def selezione_test(modello, X, idx_test, fasce=5, n_fasce=5):
@@ -45,7 +45,7 @@ def miglior_filtro_train(target, df, idx_train, filtri, min_trade=100):
 def _riga(nome, netto, quanti, totale):
     return {"": nome, "trade": int(quanti), "presi_%": 100 * quanti / totale,
             "vincenti_%": 100 * (netto > 0).mean() if quanti else np.nan,
-            "bp_medi_netti": netto.mean() if quanti else np.nan}
+            "bp_medi_netti": netto.mean() if quanti else np.nan, "±bp": piu_meno_bp(netto)}
 
 
 def confronti_test(target, df, idx_test, selezionati, filtro, quota=0.2, n_estrazioni=1000, seme=0):
@@ -72,6 +72,6 @@ def confronti_test(target, df, idx_test, selezionati, filtro, quota=0.2, n_estra
                   "vincenti_%": np.nan, "bp_medi_netti": np.quantile(medie, 0.05)})
     righe.append({"": f"{quota:.0%} a caso: 95° percentile", "trade": k, "presi_%": 100 * k / n,
                   "vincenti_%": np.nan, "bp_medi_netti": np.quantile(medie, 0.95)})
-    tab = pd.DataFrame(righe).set_index("").round({"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2})
+    tab = pd.DataFrame(righe).set_index("").round({"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2, "±bp": 2})
     percentile = 100 * (medie < sel.mean()).mean() if len(sel) else np.nan
     return tab, percentile
