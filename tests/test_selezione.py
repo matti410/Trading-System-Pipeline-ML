@@ -148,3 +148,83 @@ def test_base_e_selezione_stesse_righe(ds_vero, tmp_path):
     altro = dataclasses.replace(lato_sel, target=lato_sel.target.iloc[1:])
     with pytest.raises(ValueError, match="stesse righe"):
         pipeline.confronto_base_selezione(ds, lato, m_base, altro, m_sel)
+
+
+class _Spia:
+    """Registra righe e pesi di ogni fit di LightGBM (selezione e modelli passano tutti da modello.addestra)."""
+
+    def __init__(self, monkeypatch):
+        import modello
+        self.fit = []
+        spia = self
+        originale = modello.LGBMClassifier
+
+        class Spiato(originale):
+            def fit(self, X, y, sample_weight=None, **k):
+                spia.fit.append((X.index, None if sample_weight is None else np.asarray(sample_weight).copy()))
+                return super().fit(X, y, sample_weight=sample_weight, **k)
+        monkeypatch.setattr(modello, "LGBMClassifier", Spiato)
+
+
+def _pesi_attesi(idx, df, H, netto, peso_rendimento):
+    """La regola dei pesi, scritta una volta: unicita' x (peso per rendimento), tetto e media sulle sole righe idx."""
+    from pesi import pesi_rendimento, pesi_unicita
+    w = pesi_unicita(idx, df, H).to_numpy()
+    if peso_rendimento:
+        w = w * pesi_rendimento(netto.loc[idx]).to_numpy()
+        w = w / w.mean()
+    return w
+
+
+def _caso_pesi(n=1500):
+    X, y, df, ti = caso(3, n=n, rumore=3)
+    netto = pd.Series(np.random.default_rng(7).normal(0, 50, n), index=ti)
+    netto.iloc[::97] = 5000.0                                        # qualche trade estremo: il tetto conta
+    return X, y, df, ti, netto
+
+
+@pytest.mark.parametrize("acceso", [True, False])
+def test_selezione_e_modelli_stessi_pesi(monkeypatch, acceso):
+    from modello import addestra
+    X, y, df, ti, netto = _caso_pesi()
+    H, fine = 4, df.index[-1]
+    spia = _Spia(monkeypatch)
+    S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"], peso_rendimento=acceso, netto_bp=netto)
+    giri = S.blocchi_interni(ti, df, H, fine)
+    assert len(spia.fit) == len(giri)
+    for (righe, w), (idx_fit, _) in zip(spia.fit, giri):
+        assert righe.equals(idx_fit)
+        assert np.array_equal(w, _pesi_attesi(idx_fit, df, H, netto, acceso))     # al bit
+    # il modello finale (passi 7 e 7b) riceve i pesi con la stessa regola, sulle righe di train
+    from pesi import pesi_unicita
+    tr, te = ti[:1200], ti[1200:]
+    m = addestra(X, y, tr, te, pesi=pesi_unicita(tr, df, H), peso_rendimento=acceso, netto_bp=netto)
+    assert np.array_equal(spia.fit[-1][1], _pesi_attesi(tr, df, H, netto, acceso))
+    assert m.peso_rendimento_ is acceso
+
+
+def test_tetto_solo_sulle_righe_di_fit(monkeypatch):
+    X, y, df, ti, netto = _caso_pesi()
+    H, fine = 4, df.index[-1]
+    giri = S.blocchi_interni(ti, df, H, fine)
+    Xs = S.aggiungi_sonde(X, n=2)
+    gruppi = S.gruppi_correlati(Xs.drop(columns=["E1_TRIG"]))
+    pesi_giro = []
+    for prova in range(2):
+        spia = _Spia(monkeypatch)
+        n2 = netto.copy()
+        if prova:
+            n2.loc[n2.index.difference(giri[0][0])] = 1e6            # cambia tutto fuori dal fit del giro 1
+        S.importanza_gruppi(Xs, y, df, H, giri[:1], gruppi, fine, ripetizioni=1, peso_rendimento=True, netto_bp=n2)
+        pesi_giro.append(spia.fit[0][1])
+    assert np.array_equal(pesi_giro[0], pesi_giro[1])
+
+
+def test_spento_identico(monkeypatch):
+    """PESO_RENDIMENTO = False: i pesi sono quelli di unicita' e la selezione e' la stessa al bit di prima."""
+    X, y, df, ti, netto = _caso_pesi()
+    H, fine = 4, df.index[-1]
+    prima = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"])               # come oggi: senza netto_bp
+    spento = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"], peso_rendimento=False, netto_bp=netto)
+    pd.testing.assert_frame_equal(prima.importanze, spento.importanze, check_exact=True)
+    assert prima.tenute == spento.tenute

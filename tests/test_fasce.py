@@ -133,3 +133,42 @@ def test_un_lato_solo_passi_8_e_9(ds_vero, tmp_path, d, monkeypatch):
     monkeypatch.setattr(plt, "show", lambda *a, **k: None)
     grafico_equity(ris)
     plt.close("all")
+
+
+def test_peso_rendimento_nel_registro_e_coerente(ds_vero, tmp_path, capsys):
+    """L'interruttore entra in ogni voce (selezione, addestramento, confronto, oos); selezione e modelli coerenti."""
+    import pipeline
+    import registro
+    ds = dataclasses.replace(ds_vero, cartella=str(tmp_path))
+    trig = ds.trigger_long[:1]
+    lato = pipeline.prepara_lato(ds, 1, trig, 16)
+    rng = np.random.default_rng(0)
+    feat = pd.DataFrame({"f1": rng.normal(size=len(ds.df)), "f2": rng.normal(size=len(ds.df))}, index=ds.df.index)
+    lato = dataclasses.replace(lato, extra={"feat": feat})
+    base, _ = pipeline.allena(ds, lato, peso_rendimento=True, collaudo=True)
+    sel, lato_sel = pipeline.seleziona_lato(ds, lato, peso_rendimento=True, collaudo=True)
+    with pytest.raises(ValueError, match="PESO_RENDIMENTO"):
+        pipeline.allena(ds, lato_sel, peso_rendimento=False, collaudo=True)      # la selezione ha usato True
+    m_sel, _ = pipeline.allena(ds, lato_sel, peso_rendimento=True, collaudo=True)
+    capsys.readouterr()
+    pipeline.confronto_base_selezione(ds, lato, base, lato_sel, m_sel, collaudo=True)
+    uscita = capsys.readouterr().out
+    assert "PESO_RENDIMENTO = True" in uscita and uscita.count("fascia 5 − tutti sul test:") == 2
+    pipeline.guarda_oos(ds, lato_sel, m_sel, collaudo=True)
+    pipeline.backtest(ds, {1: lato_sel}, {1: m_sel}, collaudo=True)
+    voci = registro.leggi(str(tmp_path), f"{ds.symbol}_{ds.timeframe}")
+    assert {v["tipo"] for v in voci} == {"addestramento", "selezione", "confronto", "oos"}
+    assert all(v["peso_rendimento"] is True for v in voci)
+    # modello base e modello con la selezione con interruttori diversi: il confronto si ferma
+    spento, _ = pipeline.allena(ds, lato, peso_rendimento=False, collaudo=True)
+    with pytest.raises(ValueError, match="PESO_RENDIMENTO diversi"):
+        pipeline.confronto_base_selezione(ds, lato, spento, lato_sel, m_sel, collaudo=True)
+    assert registro.leggi(str(tmp_path), f"{ds.symbol}_{ds.timeframe}")[-1]["peso_rendimento"] is False
+
+
+def test_fascia_alta_meno_tutti():
+    import pipeline
+    fasce = pd.DataFrame({"bp_medi_netti": [-3.0, 1.5, -2.0]}, index=pd.Index(["1", "5", "tutti"], name="fascia"))
+    assert pipeline.fascia_alta_meno_tutti(fasce, 5) == 3.5
+    solo_tutti = pd.DataFrame({"bp_medi_netti": [-2.0]}, index=pd.Index(["tutti"], name="fascia"))
+    assert np.isnan(pipeline.fascia_alta_meno_tutti(solo_tutti, 5))
