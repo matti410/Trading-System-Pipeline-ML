@@ -1,7 +1,8 @@
 # 00 · Stato (aggiornato al 01/11/2026)
 
 **Incarico in corso:** `docs/04_GRUPPO_AUTOMATICO.md`, scelta automatica del gruppo di trigger e di
-H per lato. Si parte dalla proposta, senza codice.
+H per lato. La proposta `docs/05_PROPOSTA_GRUPPO.md` è approvata (01/11/2026); il codice è sul ramo
+`gruppo-automatico`, PR #11.
 
 ## Cosa c'è (main, PR #1–#10)
 
@@ -45,7 +46,9 @@ H per lato. Si parte dalla proposta, senza codice.
 
 **01/11/2026**
 - Riga «risoluzione» al passo 5: il ± atteso viene dal solo train.
-- Scelta automatica del gruppo di trigger e di H (`docs/04`).
+- Scelta automatica del gruppo di trigger e di H (`docs/04`), con le decisioni in testa a `docs/05`:
+  - Totale(H) = somma di netto_bp × peso di unicità non normalizzato;
+  - `MIN_NUOVE_PER_META = 10`.
 
 ## Valori di collaudo, non decisioni
 - I trigger e gli H usati nei collaudi.

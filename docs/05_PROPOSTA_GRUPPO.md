@@ -3,6 +3,22 @@
 **01/11/2026**, risposta a `docs/04_GRUPPO_AUTOMATICO.md` (§7). Solo testo: il codice arriva dopo il via
 di Mattia, su questo ramo (`gruppo-automatico`).
 
+**Approvata da Mattia il 01/11/2026, con queste decisioni** (valgono sopra il testo che segue):
+1. **Totale(H)** = somma, sulle barre del gruppo, di netto_bp × peso di unicità **non** normalizzato.
+   La finestra è quella di `pesi.pesi_unicita`, calcolata sulle sole barre del gruppo nel train. È
+   uguale a media netta × occorrenze effettive.
+   - Perché: con H lunghi i trade di barre vicine si sovrappongono e la somma semplice conta più volte lo
+     stesso movimento, mentre il motore tiene un trade alla volta.
+   - La tabella per H mostra occorrenze, effettive, media netta e questo Totale. La regola non cambia:
+     vince il Totale più alto, a parità l'H più corto.
+2. **`MIN_NUOVE_PER_META = 10`**, in occorrenze grezze, come nel §3.
+3. **`scelta_lato`**: se è scritto solo uno fra `TRIGGER_<LATO>` e `H_<LATO>` (l'altro è None), si ferma
+   con «scrivi trigger e H insieme, oppure lasciali tutti e due a None».
+4. **Test in più**: con prezzi a crescita costante, costi a zero e un trigger su 3 barre consecutive, il
+   Totale conta ogni barra coperta una volta sola e non cresce per la sovrapposizione.
+5. Il test «nessun numero esistente cambia» con la scelta a mano esclude solo la riga «risoluzione», che
+   ora usa le effettive (docs/04 §5).
+
 ## 1 · File e funzioni
 
 **Nuovo `gruppo.py`**: le regole del §2 e l'algoritmo del §3 di docs/04, solo sul train.
@@ -104,7 +120,7 @@ SHORT e 6 H nella griglia. Il dataset era già aperto: l'apertura serve comunque
 - Su timeframe lenti (H4) le occorrenze sono poche e il minimo pesa di più.
 - Non risolve il rischio 5 di docs/04 §1, il migliore fra tanti: lo riduce soltanto.
 
-**La mia risposta: sì, `MIN_NUOVE_PER_META = 10` in occorrenze grezze**
+**La mia risposta: sì, `MIN_NUOVE_PER_META = 10` in occorrenze grezze** (approvata il 01/11/2026)
 - Si applica solo al passo 3, alle occorrenze nuove: un trigger entra se ha almeno 10 occorrenze nuove
   in **ciascuna** metà, oltre alle medie > 0.
 - Il primo trigger del gruppo ha tutte le sue occorrenze come nuove, quindi il minimo vale anche per

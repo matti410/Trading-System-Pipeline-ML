@@ -2,7 +2,7 @@
 import pandas as pd
 import pytest
 
-from pesi import pesi_unicita
+from pesi import occorrenze_effettive, pesi_unicita
 from split import split_train_test
 
 
@@ -38,6 +38,17 @@ def test_pesi_finestre_sovrapposte():
     assert p.iloc[0] == pytest.approx(p.iloc[1])
     assert p.iloc[0] / p.iloc[2] == pytest.approx(0.625)
     assert p.mean() == pytest.approx(1.0)
+
+
+def test_effettive_isolati_e_stessa_barra():
+    df = _barre(60)
+    # trigger isolati: effettive = grezze
+    assert occorrenze_effettive(df.index[[2, 20, 40]], df, horizon=4) == pytest.approx(3.0)
+    # due trigger sempre sulla stessa barra: la meta'
+    assert occorrenze_effettive(df.index[[2, 2, 20, 20]], df, horizon=4) == pytest.approx(2.0)
+    # i pesi normalizzati (quelli del modello) non cambiano: grezzi / media
+    grezzi = pesi_unicita(df.index[[2, 3, 20]], df, horizon=4, normalizza=False)
+    pd.testing.assert_series_equal(pesi_unicita(df.index[[2, 3, 20]], df, horizon=4), grezzi / grezzi.mean())
 
 
 def test_pesi_rifiutano_trigger_senza_uscita():
