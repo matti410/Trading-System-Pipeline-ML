@@ -8,6 +8,8 @@ Le funzioni delle celle del notebook, lavoro B (30/10/2026, docs/02 §B e §F).
   sintesi_event_study(ev, timeframe) -> DataFrame
   controlla_scelta(ds, trigger, H, direzione) -> bool
   feature_lato(ds, trigger, df_btc=None) -> DataFrame
+  piu_meno_atteso(netto_bp_train, n_test, n_fasce=5) -> float
+  riga_risoluzione(n_train, n_test, piu_meno, costo_bp) -> str
   prepara_lato(ds, direzione, trigger, H, quota=0.8, feat=None) -> Lato
   seleziona_lato(ds, lato, ...) -> (Selezione, Lato con la X scelta)
   confronto_base_selezione(ds, lato, modello, lato_sel, modello_sel, ...) -> DataFrame
@@ -302,6 +304,34 @@ def feature_lato(ds, trigger, df_btc=None) -> pd.DataFrame:
     return calcola_feature(ds.df, ds.timeframe, trigger_lato=trigger_lato, df_btc=df_btc)
 
 
+# Risoluzione del test (passo 5, richiesta di Mattia del 01/11/2026; solo una stampa)
+TRIGGER_POTENZA = 5_000
+AVVISO_RISOLUZIONE = "!!! il test non può distinguere miglioramenti dell'ordine del costo di un trade"
+AVVISO_POTENZA = "la selezione vede solo feature forti (test di potenza: 5.000 trigger → AUC da sola ≥ 0,545)"
+
+
+def piu_meno_atteso(netto_bp_train, n_test: int, n_fasce: int = 5) -> float:
+    """
+    Il ± atteso della differenza «fascia alta − tutti» sul test, prima di guardarlo: s viene
+    SOLO dalle righe di train (il test entra solo con il numero dei suoi trigger).
+    """
+    s = float(np.std(np.asarray(netto_bp_train, dtype=float), ddof=1))
+    q = 1 / n_fasce
+    # ± atteso = 2 × s × radice((1 − 1/5)² × (1/(n_test/5) + 1/(n_test·4/5))), s = dev. std dei netto_bp del train
+    return float(2 * s * np.sqrt((1 - q) ** 2 * (1 / (n_test * q) + 1 / (n_test * (1 - q)))))
+
+
+def riga_risoluzione(n_train: int, n_test: int, piu_meno: float, costo_bp: float) -> str:
+    """La riga «risoluzione» del passo 5, con gli avvisi quando servono."""
+    riga = (f"risoluzione: {n_train} trigger nel train, {n_test} nel test · ± atteso di «fascia 5 − tutti» "
+            f"sul test: {piu_meno:.2f} bp (costo di un trade {float(costo_bp):.2f} bp)")
+    if piu_meno > costo_bp:
+        riga += f"\n{AVVISO_RISOLUZIONE}"
+    if n_train < TRIGGER_POTENZA:
+        riga += f"\n{AVVISO_POTENZA}"
+    return riga
+
+
 def prepara_lato(ds, direzione: int, trigger, H: int, quota: float = 0.8, feat=None) -> Lato:
     """
     Target del lato (passo 5), divisione train/test con purge ed embargo sull'H del lato e X
@@ -323,6 +353,8 @@ def prepara_lato(ds, direzione: int, trigger, H: int, quota: float = 0.8, feat=N
     print(f"target: {len(target)} trigger · classe 1 {target['TARGET'].mean():.1%} · "
           f"bp netti medi {target['netto_bp'].mean():.2f}")
     idx_train, idx_test = split_train_test(target, ds.df_is, horizon=H, quota=quota)
+    pm = piu_meno_atteso(target.loc[idx_train, "netto_bp"], len(idx_test))
+    print(riga_risoluzione(len(idx_train), len(idx_test), pm, ds.costo_bp()["totale_bp"]))
     X = costruisci_X(ds.df, target, list(trigger), ds.filtri)
     return Lato(direzione=direzione, trigger=list(trigger), H=int(H), target=target, idx_train=idx_train,
                 idx_test=idx_test, idx_oos=indici_oos(target, ds.df_is), X=X, quota=quota, extra=extra)
