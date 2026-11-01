@@ -30,6 +30,17 @@ REGOLA (decisioni del 29/9)
 import numpy as np
 import pandas as pd
 
+# Incertezza nelle tabelle (decisione di Mattia del 31/10/2026; solo visualizzazione)
+NOTA_INCERTEZZA = "± = circa 2 errori standard; trade sovrapposti rendono l'incertezza vera un po' più grande"
+
+
+def piu_meno_bp(bp) -> float:
+    """Il «±bp» di una fascia: 2 x deviazione standard dei bp netti / radice dei trade (NaN sotto i 2 trade)."""
+    bp = np.asarray(bp, dtype=float)
+    if len(bp) < 2:
+        return float("nan")
+    return float(2 * np.std(bp, ddof=1) / np.sqrt(len(bp)))
+
 
 class FasceNonCalcolabili(ValueError):
     """Le probabilita' del test non bastano per dividere il test in fasce."""
@@ -62,7 +73,8 @@ def _riga(nome, p, y, bp, presi, totale):
     return {"": nome, "trade": int(presi.sum()),
             "presi_%": 100 * presi.sum() / totale,
             "vincenti_%": 100 * y[presi].mean() if presi.any() else np.nan,
-            "bp_medi_netti": bp[presi].mean() if presi.any() else np.nan}
+            "bp_medi_netti": bp[presi].mean() if presi.any() else np.nan,
+            "±bp": piu_meno_bp(bp[presi])}
 
 
 def soglia_dal_test(modello, X, idx_test, fasce=5, n_fasce=5):
@@ -86,7 +98,7 @@ def _solo_tutti(y, rend, idx_test, idx_oos):
         yy = y.loc[idx].to_numpy()
         bp = rend.loc[idx].to_numpy() * 1e4
         righe.append(_riga(f"{nome} tutti", None, yy, bp, np.ones(len(idx), dtype=bool), len(idx)))
-    return pd.DataFrame(righe).set_index("").round({"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2})
+    return pd.DataFrame(righe).set_index("").round({"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2, "±bp": 2})
 
 
 def valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5, solo_tutti=False):
@@ -133,4 +145,4 @@ def valuta_oos(modello, X, y, rend, idx_test, idx_oos, fasce=5, n_fasce=5, solo_
         righe.append(_riga(f"{nome} {etichetta}", p, yy, bp, seleziona(p), len(p)))
         righe.append(_riga(f"{nome} tutti", p, yy, bp, tutti, len(p)))
     return pd.DataFrame(righe).set_index("").round(
-        {"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2})
+        {"presi_%": 1, "vincenti_%": 1, "bp_medi_netti": 2, "±bp": 2})

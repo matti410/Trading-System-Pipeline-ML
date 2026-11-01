@@ -11,7 +11,7 @@ Le funzioni delle celle del notebook, lavoro B (30/10/2026, docs/02 §B e §F).
   prepara_lato(ds, direzione, trigger, H, quota=0.8, feat=None) -> Lato
   seleziona_lato(ds, lato, ...) -> (Selezione, Lato con la X scelta)
   confronto_base_selezione(ds, lato, modello, lato_sel, modello_sel, ...) -> DataFrame
-  allena(ds, lato, con_unicita=True, peso_rendimento=False, ...) -> (modello, fasce)
+  allena(ds, lato, con_unicita=True, peso_rendimento=True, ...) -> (modello, fasce)
   confronti(ds, lato, modello, fasce=5) -> (tabella, percentile)
   guarda_oos(ds, lato, modello, fasce=5, ...) -> tabella
   backtest(ds, lati, modelli, fasce=5, ...) -> (tabella, risultati)
@@ -43,8 +43,9 @@ from sklearn.metrics import roc_auc_score
 import registro
 from backtest_oos import esegui_backtest, tabella_metriche, trigger_in_fascia
 from confronti import confronti_test, miglior_filtro_train, selezione_test
-from modello import PARAMETRI_BASE, addestra, importanza, rendimenti_trigger, valuta
-from oos import FasceNonCalcolabili, indici_oos, soglia_dal_test, valuta_oos
+from modello import (PARAMETRI_BASE, addestra, fascia_alta_contro_tutti, importanza, rendimenti_trigger,
+                     valuta)
+from oos import NOTA_INCERTEZZA, FasceNonCalcolabili, indici_oos, piu_meno_bp, soglia_dal_test, valuta_oos
 from pesi import pesi_unicita
 from split import barra_confine, costruisci_X, split_train_test
 from target import costruisci_target
@@ -350,7 +351,7 @@ def tabella_trigger_train(lato: Lato) -> pd.DataFrame:
     return tab.astype({"occorrenze": int})
 
 
-def seleziona_lato(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = False, seme: int = 0,
+def seleziona_lato(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = True, seme: int = 0,
                    collaudo: bool = False, macchina=None):
     """
     Feature selection del lato sul solo train (passo 7b): candidate = le feature del catalogo
@@ -408,14 +409,16 @@ def confronto_base_selezione(ds, lato: Lato, modello, lato_sel: Lato, modello_se
             tab[nome] = valuta(m, l.X, l.y, l.rend, l.idx_train, l.idx_test, n_fasce=n_fasce)
         auc[nome] = {n: float(roc_auc_score(l.y.loc[i], m.predict_proba(l.X.loc[i])[:, 1]))
                      for n, i in (("train", l.idx_train), ("test", l.idx_test))}
-    fianco = pd.concat({k: v[["trade", "vincenti_%", "bp_medi_netti"]] for k, v in tab.items()}, axis=1)
-    alta = {k: fascia_alta_meno_tutti(v, n_fasce) for k, v in tab.items()}
+    fianco = pd.concat({k: v[["trade", "vincenti_%", "bp_medi_netti", "±bp"]] for k, v in tab.items()}, axis=1)
+    alta = {nome: fascia_alta_contro_tutti(m, l.X, l.rend, l.idx_test, n_fasce)
+            for nome, l, m in (("base", lato, modello), ("selezione", lato_sel, modello_sel))}
     print(f"===== {lato.nome} · test: modello base (riferimento) e modello con la selezione =====")
     print(f"PESO_RENDIMENTO = {peso}")
     for nome, l in (("base", lato), ("selezione", lato_sel)):
         print(f"AUC {nome:<9} train {auc[nome]['train']:.3f}   test {auc[nome]['test']:.3f}   "
-              f"({l.X.shape[1]} colonne) · fascia {n_fasce} − tutti sul test: {_bp_o_motivo(alta[nome])}")
+              f"({l.X.shape[1]} colonne) · fascia {n_fasce} − tutti sul test: {riga_differenza(*alta[nome])}")
     print(fianco.to_string())
+    print(NOTA_INCERTEZZA)
     registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
         "tipo": "confronto", **_base_voce(ds, lato, collaudo, peso), "auc": auc,
         "colonne": {"base": list(lato.X.columns), "selezione": list(lato_sel.X.columns)},
@@ -423,15 +426,15 @@ def confronto_base_selezione(ds, lato: Lato, modello, lato_sel: Lato, modello_se
     return fianco
 
 
-def fascia_alta_meno_tutti(fasce: pd.DataFrame, n_fasce: int = 5) -> float:
-    """Sul test: bp netti medi della fascia piu' alta meno bp netti medi di tutti i trigger (NaN senza fasce)."""
-    if str(n_fasce) not in fasce.index:
-        return float("nan")
-    return float(fasce.loc[str(n_fasce), "bp_medi_netti"] - fasce.loc["tutti", "bp_medi_netti"])
+ETICHETTA_CASO = "non distinguibile dal caso"
 
 
-def _bp_o_motivo(x: float) -> str:
-    return "non calcolabile (niente fasce)" if np.isnan(x) else f"{x:+.2f} bp"
+def riga_differenza(diff: float, piu_meno: float) -> str:
+    """La differenza «fascia alta − tutti» con il suo ±; l'etichetta se |differenza| < ±."""
+    if np.isnan(diff):
+        return "non calcolabile (niente fasce)"
+    testo = f"{diff:+.2f} ± {piu_meno:.2f} bp"
+    return testo + f" ({ETICHETTA_CASO})" if abs(diff) < piu_meno else testo
 
 
 def _base_voce(ds, lato, collaudo, peso_rendimento):
@@ -449,7 +452,7 @@ def peso_del_modello(modello):
     return getattr(modello, "peso_rendimento_", None)
 
 
-def allena(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = False, parametri=None,
+def allena(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = True, parametri=None,
            collaudo: bool = False, macchina=None):
     """
     Modello del lato sul solo train (passo 7): AUC, fasce sul test e feature piu'
@@ -465,6 +468,7 @@ def allena(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = Fal
     print(f"===== {lato.nome} =====")
     fasce = valuta(modello, lato.X, lato.y, lato.rend, lato.idx_train, lato.idx_test)
     print(fasce.to_string())
+    print(NOTA_INCERTEZZA)
     imp = importanza(modello, lato.X)
     print("\ncolonne piu' usate:")
     print(imp.head(10).to_string())
@@ -525,8 +529,10 @@ def confronti(ds, lato: Lato, modello, fasce=5, n_fasce: int = 5, min_trade: int
         netto = lato.target.loc[lato.idx_test, "netto_bp"]
         tab = pd.DataFrame([{"": "tutti i trigger del test", "trade": len(netto), "presi_%": 100.0,
                              "vincenti_%": round(100 * float((netto > 0).mean()), 1),
-                             "bp_medi_netti": round(float(netto.mean()), 2)}]).set_index("")
+                             "bp_medi_netti": round(float(netto.mean()), 2),
+                             "±bp": round(piu_meno_bp(netto), 2)}]).set_index("")
         print(tab.to_string())
+        print(NOTA_INCERTEZZA)
         return tab, float("nan")
     filtro, tab_filtri = miglior_filtro_train(lato.target, ds.df, lato.idx_train, ds.filtri, min_trade)
     sel = selezione_test(modello, lato.X, lato.idx_test, fasce, n_fasce)
@@ -535,6 +541,7 @@ def confronti(ds, lato: Lato, modello, fasce=5, n_fasce: int = 5, min_trade: int
     print(f"miglior filtro sul train (almeno {min_trade} trigger): {filtro} "
           f"({len(tab_filtri)} filtri ammessi)")
     print(tab.to_string())
+    print(NOTA_INCERTEZZA)
     print(f"il modello sta al {percentile:.1f}° percentile delle {n_estrazioni} estrazioni a caso (seme {seme})")
     return tab, percentile
 
@@ -566,6 +573,7 @@ def guarda_oos(ds, lato: Lato, modello, fasce=5, n_fasce: int = 5, collaudo: boo
     tab = valuta_oos(modello, lato.X, lato.y, lato.rend, lato.idx_test, lato.idx_oos, fasce=fasce,
                      n_fasce=n_fasce, solo_tutti=solo)
     print(tab.to_string())
+    print(NOTA_INCERTEZZA)
     registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
         "tipo": "oos", "cosa": "tabella", **_base_voce(ds, lato, collaudo, peso_del_modello(modello)), "fasce": fasce,
         "solo_tutti": bool(solo or len(tab) == 2),

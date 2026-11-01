@@ -29,7 +29,7 @@ def caso(seme_dati, n=5000, rumore=20):
 def test_una_vera_e_venti_di_rumore(seme_dati):
     """Controllo del comportamento sugli 8 casi del §F (non una garanzia): con la regola B passa solo la vera."""
     X, y, df, ti = caso(seme_dati)
-    sel = S.selezione(X, y, df, ti, df.index[-1], 4, sempre=["E1_TRIG"], con_unicita=False)
+    sel = S.selezione(X, y, df, ti, df.index[-1], 4, sempre=["E1_TRIG"], con_unicita=False, peso_rendimento=False)
     assert sel.tenute == ["vera"]
     t = sel.tabella
     assert t.loc["E1_TRIG", "esito"].startswith("sempre")
@@ -39,8 +39,8 @@ def test_una_vera_e_venti_di_rumore(seme_dati):
 
 def test_sonde_a_seme_fisso():
     X, y, df, ti = caso(0, n=2000, rumore=5)
-    a = S.selezione(X, y, df, ti, df.index[-1], 4, sempre=["E1_TRIG"], con_unicita=False)
-    b = S.selezione(X, y, df, ti, df.index[-1], 4, sempre=["E1_TRIG"], con_unicita=False)
+    a = S.selezione(X, y, df, ti, df.index[-1], 4, sempre=["E1_TRIG"], con_unicita=False, peso_rendimento=False)
+    b = S.selezione(X, y, df, ti, df.index[-1], 4, sempre=["E1_TRIG"], con_unicita=False, peso_rendimento=False)
     pd.testing.assert_frame_equal(a.tabella, b.tabella)
     pd.testing.assert_frame_equal(a.importanze, b.importanze)
     s1 = S.aggiungi_sonde(X, seme=0)
@@ -90,7 +90,7 @@ def test_si_ferma_con_una_data_del_test_o_dell_oos():
     X, y, df, ti = caso(0, n=1000, rumore=3)
     inizio_test = ti[800]
     with pytest.raises(ValueError, match="test e OOS non entrano"):
-        S.selezione(X, y, df, ti, inizio_test, 4, sempre=["E1_TRIG"], con_unicita=False)
+        S.selezione(X, y, df, ti, inizio_test, 4, sempre=["E1_TRIG"], con_unicita=False, peso_rendimento=False)
     with pytest.raises(ValueError, match="test e OOS non entrano"):
         S.blocchi_interni(ti, df, 4, inizio_test)
     S.blocchi_interni(ti[:800], df, 4, inizio_test)                    # solo train: va
@@ -133,13 +133,13 @@ def test_base_e_selezione_stesse_righe(ds_vero, tmp_path):
     _, barre = riscaldamento(feat)
     assert lato.target.index.min() >= ds.df.index[barre]                 # niente trigger nel riscaldamento
     assert lato.extra["tolti_riscaldamento"] > 0
-    m_base, _ = pipeline.allena(ds, lato, collaudo=True)
-    sel, lato_sel = pipeline.seleziona_lato(ds, lato, collaudo=True)
+    m_base, _ = pipeline.allena(ds, lato, peso_rendimento=False, collaudo=True)
+    sel, lato_sel = pipeline.seleziona_lato(ds, lato, peso_rendimento=False, collaudo=True)
     assert lato_sel.target.index.equals(lato.target.index)
     assert lato_sel.idx_train.equals(lato.idx_train) and lato_sel.idx_test.equals(lato.idx_test)
     assert lato_sel.idx_oos.equals(lato.idx_oos)
     assert list(lato_sel.X.columns) == trig + sel.tenute
-    m_sel, _ = pipeline.allena(ds, lato_sel, collaudo=True)
+    m_sel, _ = pipeline.allena(ds, lato_sel, peso_rendimento=False, collaudo=True)
     pipeline.confronto_base_selezione(ds, lato, m_base, lato_sel, m_sel, collaudo=True)
     import registro
     tipi = [v["tipo"] for v in registro.leggi(ds.cartella, f"{ds.symbol}_{ds.timeframe}")]
@@ -224,7 +224,7 @@ def test_spento_identico(monkeypatch):
     """PESO_RENDIMENTO = False: i pesi sono quelli di unicita' e la selezione e' la stessa al bit di prima."""
     X, y, df, ti, netto = _caso_pesi()
     H, fine = 4, df.index[-1]
-    prima = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"])               # come oggi: senza netto_bp
+    prima = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"], peso_rendimento=False)  # come prima: senza netto_bp
     spento = S.selezione(X, y, df, ti, fine, H, sempre=["E1_TRIG"], peso_rendimento=False, netto_bp=netto)
     pd.testing.assert_frame_equal(prima.importanze, spento.importanze, check_exact=True)
     assert prima.tenute == spento.tenute

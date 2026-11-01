@@ -77,7 +77,7 @@ def test_lato_senza_feature_passi_8_e_9(ds_vero, tmp_path, capsys):
     # un lato con la selezione che non ha tenuto nessuna feature: X = sola identita' del trigger
     lato_sel = dataclasses.replace(lato, X=lato.X[trig], extra={"selezione": SimpleNamespace(tenute=[])})
     assert pipeline.nessuna_feature(lato_sel) and not pipeline.nessuna_feature(lato)
-    modello, _ = pipeline.allena(ds, lato_sel, collaudo=True)
+    modello, _ = pipeline.allena(ds, lato_sel, peso_rendimento=False, collaudo=True)
     capsys.readouterr()
     frase = "SHORT: la selezione non ha tenuto nessuna feature, il modello non distingue i trigger"
     assert pipeline.mostra_soglia(lato_sel, modello) is None
@@ -101,8 +101,8 @@ def test_backtest_un_lato_senza_feature(ds_vero, tmp_path):
     lato_s = pipeline.prepara_lato(ds, -1, ds.trigger_short[:1], 32)
     lato_s = dataclasses.replace(lato_s, X=lato_s.X[ds.trigger_short[:1]],
                                  extra={"selezione": SimpleNamespace(tenute=[])})
-    m_l, _ = pipeline.allena(ds, lato_l, collaudo=True)
-    m_s, _ = pipeline.allena(ds, lato_s, collaudo=True)
+    m_l, _ = pipeline.allena(ds, lato_l, peso_rendimento=False, collaudo=True)
+    m_s, _ = pipeline.allena(ds, lato_s, peso_rendimento=False, collaudo=True)
     tab, ris = pipeline.backtest(ds, {1: lato_l, -1: lato_s}, {1: m_l, -1: m_s}, collaudo=True)
     righe = set(tab.index)
     assert ("LONG", "modello") in righe and ("SHORT", "modello") not in righe
@@ -117,7 +117,7 @@ def test_un_lato_solo_passi_8_e_9(ds_vero, tmp_path, d, monkeypatch):
     ds = dataclasses.replace(ds_vero, cartella=str(tmp_path))
     trig = (ds.trigger_long if d == 1 else ds.trigger_short)[:1]
     lato = pipeline.prepara_lato(ds, d, trig, 16)
-    modello, _ = pipeline.allena(ds, lato, collaudo=True)
+    modello, _ = pipeline.allena(ds, lato, peso_rendimento=False, collaudo=True)
     pipeline.mostra_soglia(lato, modello)
     pipeline.confronti(ds, lato, modello)
     pipeline.guarda_oos(ds, lato, modello, collaudo=True)
@@ -166,9 +166,59 @@ def test_peso_rendimento_nel_registro_e_coerente(ds_vero, tmp_path, capsys):
     assert registro.leggi(str(tmp_path), f"{ds.symbol}_{ds.timeframe}")[-1]["peso_rendimento"] is False
 
 
-def test_fascia_alta_meno_tutti():
+def test_piu_meno_calcolato_a_mano():
+    """Il ±bp = 2 x deviazione standard / radice dei trade, sui bp inventati e noti."""
+    from oos import piu_meno_bp
+    bp = [10.0, -20.0, 30.0, 0.0]                    # media 5, scarti 5 -25 25 -5: somma dei quadrati 1300
+    assert np.isclose(piu_meno_bp(bp), 2 * np.sqrt(1300 / 3) / 2)
+    assert np.isnan(piu_meno_bp([7.0])) and np.isnan(piu_meno_bp([]))
+
+
+def test_piu_meno_nelle_tabelle():
+    """La colonna «±bp» c'e' nelle fasce del test, nella tabella OOS e nei confronti; gli altri numeri non cambiano."""
+    from confronti import confronti_test
+    from modello import valuta
+    from oos import piu_meno_bp
+    X, y, rend, _, _ = _dati(500)
+    m = Costante(valori=np.linspace(0.1, 0.9, 7))
+    idx = X.index
+    tr, te, oo = idx[:200], idx[200:400], idx[400:]
+    tab = valuta(m, X, y, rend, tr, te)
+    assert list(tab.columns) == ["prob_da", "prob_a", "trade", "vincenti_%", "bp_medi_netti", "±bp"]
+    assert tab.loc["tutti", "±bp"] == round(piu_meno_bp(rend.loc[te].to_numpy() * 1e4), 2)
+    oos = valuta_oos(m, X, y, rend, te, oo)
+    assert oos.loc["OOS tutti", "±bp"] == round(piu_meno_bp(rend.loc[oo].to_numpy() * 1e4), 2)
+    target = pd.DataFrame({"netto_bp": rend * 1e4})
+    df = pd.DataFrame({"F1": np.arange(len(idx)) % 2}, index=idx)
+    conf, _ = confronti_test(target, df, te, te[:40], "F1")
+    netto = target.loc[te, "netto_bp"].to_numpy()
+    assert conf.loc["tutti i trigger del test", "±bp"] == round(piu_meno_bp(netto), 2)
+    assert conf.loc["modello (fascia operativa)", "±bp"] == round(piu_meno_bp(netto[:40]), 2)
+
+
+def test_differenza_fascia_alta_e_etichetta():
+    """La differenza «fascia 5 − tutti», il suo ± (la fascia e' dentro «tutti») e l'etichetta."""
     import pipeline
-    fasce = pd.DataFrame({"bp_medi_netti": [-3.0, 1.5, -2.0]}, index=pd.Index(["1", "5", "tutti"], name="fascia"))
-    assert pipeline.fascia_alta_meno_tutti(fasce, 5) == 3.5
-    solo_tutti = pd.DataFrame({"bp_medi_netti": [-2.0]}, index=pd.Index(["tutti"], name="fascia"))
-    assert np.isnan(pipeline.fascia_alta_meno_tutti(solo_tutti, 5))
+    from modello import differenza_con_incertezza
+    alta = np.array([10.0, -20.0, 30.0, 0.0])
+    altri = np.array([1.0, -3.0, 2.0, 0.0, 5.0, -5.0])
+    tutti = np.r_[alta, altri]
+    diff, pm = differenza_con_incertezza(alta, tutti)
+    assert np.isclose(diff, alta.mean() - tutti.mean())
+    f = 1 - len(alta) / len(tutti)                   # 0,6
+    a_mano = 2 * np.sqrt(f ** 2 * (np.var(alta, ddof=1) / 4 + np.var(altri, ddof=1) / 6))
+    assert np.isclose(pm, a_mano)
+    assert np.isclose(diff, f * (alta.mean() - altri.mean()))
+    assert pipeline.riga_differenza(diff, pm) == f"{diff:+.2f} ± {pm:.2f} bp (non distinguibile dal caso)"
+    assert "non distinguibile" in pipeline.riga_differenza(1.0, 1.5)       # dentro il ±
+    assert pipeline.riga_differenza(-2.0, 1.5) == "-2.00 ± 1.50 bp"          # fuori dal ±: nessuna etichetta
+    assert pipeline.riga_differenza(float("nan"), float("nan")) == "non calcolabile (niente fasce)"
+
+
+def test_peso_rendimento_acceso_di_default():
+    import inspect
+    import pipeline
+    import selezione
+    from modello import addestra
+    for f in (addestra, pipeline.allena, pipeline.seleziona_lato, selezione.importanza_gruppi, selezione.selezione):
+        assert inspect.signature(f).parameters["peso_rendimento"].default is True, f.__name__

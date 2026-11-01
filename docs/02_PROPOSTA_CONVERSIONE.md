@@ -282,6 +282,12 @@ scelte, accanto al modello base.
 
 1. **D1 sì**: pesi anche per |rendimento|, interruttore spento di default, tetto al 95° percentile del
    train.
+   - **Aggiornamento del 31/10/2026 (decisione di Mattia): `PESO_RENDIMENTO = True` è il default**, scelto
+     per principio (allinea il modello ai bp), non per i risultati del test. Vale per il notebook (Avvio) e
+     per le funzioni (`addestra`, `importanza_gruppi`, `selezione`, `seleziona_lato`, `allena`). Un solo
+     interruttore per selezione, modello base e modello con la selezione (PR #8); con l'interruttore
+     acceso anche la log-loss di validazione della selezione è pesata per |netto|, con il tetto delle righe
+     di fit del giro. I test che contavano sul default spento passano `False` in modo esplicito.
 2. **D2 sì**: event study solo sul train.
 3. **D3 sì**: i due confronti fissi sul test, solo stampati.
 4. **D4 sì**: registro in `DATI_DIR/registro_ml/`. In più, il confronto sul test «modello base contro

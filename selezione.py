@@ -135,7 +135,7 @@ def pesi_validazione(netto_bp, idx_fit, idx_val):
 
 
 def importanza_gruppi(X, y, df, horizon, blocchi, gruppi, inizio_test, ripetizioni=RIPETIZIONI, seme=0,
-                      con_unicita=True, peso_rendimento=False, netto_bp=None, parametri=None):
+                      con_unicita=True, peso_rendimento=True, netto_bp=None, parametri=None):
     """
     Importanza di ogni gruppo in ogni giro: aumento medio della log-loss sul blocco di
     validazione quando si mescolano insieme le colonne del gruppo. Una riga per gruppo
@@ -240,7 +240,7 @@ def conta_esiti(tabella) -> dict:
 
 
 def selezione(X, y, df, idx_train, inizio_test, horizon, sempre=(), n_blocchi=N_BLOCCHI, soglia=SOGLIA_RHO,
-              ripetizioni=RIPETIZIONI, n_sonde=N_SONDE, seme=0, con_unicita=True, peso_rendimento=False,
+              ripetizioni=RIPETIZIONI, n_sonde=N_SONDE, seme=0, con_unicita=True, peso_rendimento=True,
               netto_bp=None, parametri=None) -> Selezione:
     """
     La selezione completa sul solo train. X: le candidate piu' le colonne `sempre` (identita'

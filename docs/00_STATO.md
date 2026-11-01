@@ -1,4 +1,4 @@
-# 00 · Stato (aggiornato al 30/10/2026)
+# 00 · Stato (aggiornato al 31/10/2026)
 
 **Incarico in corso:** nessuno.
 
@@ -45,6 +45,10 @@ Con il lavoro A:
    - Il catalogo è uguale per tutti.
    - La selezione si fa per dataset (symbol × timeframe × lato).
 5. Il modello base resta **LightGBM**. Gli altri modelli si confrontano più avanti.
+
+## Decisioni di Mattia (31/10/2026)
+1. **`PESO_RENDIMENTO = True` di default** (docs/02 §F, D1): scelto per principio, perché allinea il modello
+   ai bp, non per i risultati del test. Un solo interruttore, nell'Avvio, per selezione e modelli.
 
 ## Ordine dei lavori
 Ogni lavoro ha la sua PR.
