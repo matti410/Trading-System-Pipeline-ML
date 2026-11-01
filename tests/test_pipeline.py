@@ -299,3 +299,34 @@ def test_guarda_oos_spento(v4, tmp_path, monkeypatch, capsys):
     # solo True apre l'OOS (nemmeno un valore «vero» qualunque)
     assert pipeline.oos_permesso(True) is True
     assert pipeline.oos_permesso(1) is False and pipeline.oos_permesso("True") is False
+
+
+def test_risoluzione_calcolata_a_mano():
+    """Con s e n noti, il ± atteso e' quello della formula scritta a mano."""
+    netto = np.array([10.0, -20.0, 30.0, 0.0])       # media 5, somma dei quadrati degli scarti 1300
+    s = np.sqrt(1300 / 3)
+    n = 500
+    a_mano = 2 * s * np.sqrt((1 - 1 / 5) ** 2 * (1 / (n / 5) + 1 / (n * 4 / 5)))
+    assert np.isclose(pipeline.piu_meno_atteso(netto, n), a_mano)
+
+
+def test_risoluzione_non_vede_il_test(ds_vero, capsys):
+    """Il ± atteso viene solo dal train: cambiare i netto_bp del test (e dell'OOS) non lo cambia."""
+    lato = pipeline.prepara_lato(ds_vero, 1, ds_vero.trigger_long[:2], 16)
+    uscita = capsys.readouterr().out
+    pm = pipeline.piu_meno_atteso(lato.target.loc[lato.idx_train, "netto_bp"], len(lato.idx_test))
+    assert pipeline.riga_risoluzione(len(lato.idx_train), len(lato.idx_test), pm,
+                                     ds_vero.costo_bp()["totale_bp"]) in uscita
+    target = lato.target.copy()
+    target.loc[target.index.difference(lato.idx_train), "netto_bp"] = 9999.0
+    assert pipeline.piu_meno_atteso(target.loc[lato.idx_train, "netto_bp"], len(lato.idx_test)) == pm
+
+
+def test_risoluzione_avvisi_solo_quando_servono():
+    r = pipeline.riga_risoluzione
+    assert pipeline.AVVISO_RISOLUZIONE in r(6000, 1500, 12.0, 10.0)        # ± sopra il costo
+    assert pipeline.AVVISO_RISOLUZIONE not in r(6000, 1500, 9.0, 10.0)
+    assert pipeline.AVVISO_POTENZA in r(4999, 1500, 9.0, 10.0)             # meno di 5.000 nel train
+    assert pipeline.AVVISO_POTENZA not in r(5000, 1500, 9.0, 10.0)
+    assert r(5000, 1500, 9.0, 10.0).count("\n") == 0
+    assert "test di potenza: 5.000 trigger → AUC da sola ≥ 0,545" in pipeline.AVVISO_POTENZA
