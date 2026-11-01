@@ -1,68 +1,55 @@
-# 00 · Stato (aggiornato al 31/10/2026)
+# 00 · Stato (aggiornato al 01/11/2026)
 
-**Incarico in corso:** nessuno.
+**Incarico in corso:** `docs/04_GRUPPO_AUTOMATICO.md`, scelta automatica del gruppo di trigger e di
+H per lato. Si parte dalla proposta, senza codice.
 
-**Fatti** (`docs/02_PROPOSTA_CONVERSIONE.md`):
-- lavoro A, pulizia e collegamento a V4 (PR #1);
-- lavoro B, pipeline base crypto (PR #2);
-- lavoro C, catalogo delle feature di contesto (PR #3, decisioni in §H);
-- lavoro D, feature selection con le sonde, regola B (PR #4, decisioni in §F e §I).
-
-## Com'è il repo oggi
-Una prima bozza fatta su EURUSD M15 con una copia del vecchio motore (V3).
-
-I moduli ML funzionano e sono collaudati su EURUSD:
+## Cosa c'è (main, PR #1–#10)
 
 | file | cosa fa |
 |---|---|
-| `target.py` | il target del trigger |
-| `split.py` | divisione train/test, con purge ed embargo |
-| `modello.py` | LightGBM e valutazione per fasce di probabilità |
-| `pesi.py` | pesi di unicità |
-| `oos.py` | soglia ricavata dal test e applicata all'OOS |
-| `backtest_oos.py` | backtest sul motore veloce di V4 (lavoro B) |
-| `pipeline.py` | le funzioni delle celle del notebook (lavoro B) |
-| `confronti.py` | i due confronti fissi sul test, D3 (lavoro B) |
-| `registro.py` | il registro delle prove in `registro_ml/`, D4 (lavoro B) |
-| `feature/` | il catalogo delle 73 feature di contesto e i suoi collaudi (lavoro C) |
-| `selezione.py` | la feature selection con le sonde, regola B (lavoro D) |
+| `collegamento_v4.py`, `dataset.py` | V4 in sola lettura: dati, confine dello studio, costi, trigger, filtri |
+| `target.py` | target = motore veloce di V4: ingresso Open i+1, uscita Open i+H+1, costi del Lab |
+| `split.py`, `pesi.py` | train/test con purge ed embargo; pesi di unicità e per rendimento |
+| `feature/` | catalogo di 73 feature di contesto (finestre in ore) e collaudi |
+| `selezione.py` | feature selection: 5 blocchi, sonde, regola B, K |
+| `modello.py`, `oos.py`, `confronti.py` | LightGBM, fasce con ±bp, soglia dal test, confronti D3 |
+| `backtest_oos.py` | backtest sul motore veloce di V4, con il buy & hold |
+| `pipeline.py` | le funzioni delle celle del notebook |
+| `registro.py` | registro delle prove in `registro_ml/` (accanto allo studio, mai dentro) |
 
-Con il lavoro A:
-- tolte le copie V3 (`engine/`, entry, filtri, `helpers.py`), i costi IC Markets e il CSV EURUSD;
-- nuovi `collegamento_v4.py` (V4 in sola lettura, con ramo e commit stampati) e `dataset.py` (dati,
-  confine, costi, trigger e filtri presi da V4);
-- `target.py` usa la regola del motore veloce di V4 e i costi del Lab;
-- nuovi `requirements.txt` e `tests/`;
-- il notebook ha solo le celle 0–2. Con il lavoro B ha la sequenza in 9 passi di docs/02 §B.
+**Il notebook `TS-Pipeline-ML.ipynb`:**
+1. dataset;
+2. confine e feature;
+3. event study sul train, con i primi 10 con picco > 0 e la linea del costo;
+4. scelta dei trigger e di H; un lato vuoto si salta;
+5. target, divisione e riga «risoluzione»;
+6. modello base (passo 7);
+7. selezione e confronto (passo 7b);
+8. soglia e confronti (passo 8);
+9. OOS e backtest (passo 9), solo con `GUARDA_OOS = True`.
 
-## Decisioni di Mattia (30/10/2026)
-1. **Target (a)**: si guarda l'esito a H barre. Dal 30/10 (docs/02 §F, D5) l'uscita è all'Open della
-   barra i+H+1, come il motore veloce di V4.
-2. **Un modello per lato.** Ogni lato ha il suo H, scelto da Mattia dall'event study.
-3. **Solo crypto**, come V4. Dati, costi e trigger vengono da V4.
-4. **Feature:** un catalogo ampio di feature di contesto, compresi i rendimenti passati,
-   e poi una feature selection.
-   - Il catalogo è uguale per tutti.
-   - La selezione si fa per dataset (symbol × timeframe × lato).
-5. Il modello base resta **LightGBM**. Gli altri modelli si confrontano più avanti.
+## Decisioni di Mattia
 
-## Decisioni di Mattia (31/10/2026)
-1. **`PESO_RENDIMENTO = True` di default** (docs/02 §F, D1): scelto per principio, perché allinea il modello
-   ai bp, non per i risultati del test. Un solo interruttore, nell'Avvio, per selezione e modelli.
+**30/10/2026**
+- Target (a): uscita a tempo, senza SL e TP.
+- Un modello per lato, con un H per lato.
+- Solo crypto.
+- LightGBM come modello.
+- Catalogo di feature unico per tutti; selezione fatta per dataset e lato.
 
-## Ordine dei lavori
-Ogni lavoro ha la sua PR.
-- A: pulizia e collegamento a V4.
-- B: pipeline base crypto.
-- C: catalogo delle feature.
-- D: feature selection.
+**31/10/2026**
+- `PESO_RENDIMENTO = True` di default (per principio).
+- `GUARDA_OOS = False` di default: l'OOS si apre una volta, a scelta fatta.
+- Colonna ±bp in tutte le tabelle.
+- Le leve di miglioramento sono in `docs/03`, da leggere solo se il lavoro lo chiede.
+
+**01/11/2026**
+- Riga «risoluzione» al passo 5: il ± atteso viene dal solo train.
+- Scelta automatica del gruppo di trigger e di H (`docs/04`).
 
 ## Valori di collaudo, non decisioni
-Questi valori non sono motivati e servono solo a far girare il codice:
-- H = 25 del vecchio notebook;
-- nel collaudo del lavoro B: il primo trigger long e il primo short dell'elenco del Lab, `H_LONG = 16`,
-  `H_SHORT = 32`;
-- fascia operativa 5;
+- I trigger e gli H usati nei collaudi.
+- Fascia operativa 5.
 - `PARAMETRI_BASE` di LightGBM.
 
-La storia del ramo EURUSD è nel Project di Mattia, non nel repo.
+La storia è nel Project di Mattia, non nel repo.
