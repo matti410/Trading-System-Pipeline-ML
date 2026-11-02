@@ -6,11 +6,15 @@ Le funzioni delle celle del notebook, lavoro B (30/10/2026, docs/02 §B e §F).
   barre_train(ds, quota=0.8) -> DataFrame
   event_study_train(ds, direzione, H, quota=0.8, trigger=None) -> EventStudy
   sintesi_event_study(ev, timeframe) -> DataFrame
+  tabella_proposta(proposta, timeframe) -> DataFrame
+  grafico_gruppo(ev, proposta, costo_bp=None) -> etichette
+  scelta_lato(ds, proposta, trigger, H, direzione, collaudo=False) -> (trigger, H, origine)
   controlla_scelta(ds, trigger, H, direzione) -> bool
   feature_lato(ds, trigger, df_btc=None) -> DataFrame
   piu_meno_atteso(netto_bp_train, n_test, n_fasce=5) -> float
-  riga_risoluzione(n_train, n_test, piu_meno, costo_bp) -> str
+  riga_risoluzione(n_train, n_test, eff_train, eff_test, piu_meno, costo_bp) -> str
   prepara_lato(ds, direzione, trigger, H, quota=0.8, feat=None) -> Lato
+  verifica_gruppo(lato) -> DataFrame
   seleziona_lato(ds, lato, ...) -> (Selezione, Lato con la X scelta)
   confronto_base_selezione(ds, lato, modello, lato_sel, modello_sel, ...) -> DataFrame
   allena(ds, lato, con_unicita=True, peso_rendimento=True, ...) -> (modello, fasce)
@@ -22,8 +26,8 @@ REGOLE
 ------
 - L'event study gira SOLO sulle barre del train (D2): le barre prima del confine
   train/test di split.barra_confine, lo stesso dello split. min_trades del Lab.
-- Nessuna scelta automatica: trigger e H del lato li scrive Mattia
-  (controlla_scelta li controlla e basta).
+- Trigger e H del lato: la proposta automatica di gruppo.py (docs/04, 01/11/2026) oppure la
+  scelta a mano di Mattia nella cella 4 (scelta_lato); controlla_scelta li controlla e basta.
 - Ogni addestramento e ogni sguardo all'OOS (tabella o backtest) finiscono nel
   registro (registro.py, D4). Dal lavoro D anche ogni selezione e ogni confronto
   base/selezione.
@@ -45,10 +49,11 @@ from sklearn.metrics import roc_auc_score
 import registro
 from backtest_oos import esegui_backtest, tabella_metriche, trigger_in_fascia
 from confronti import confronti_test, miglior_filtro_train, selezione_test
+from gruppo import ENTRA
 from modello import (PARAMETRI_BASE, addestra, fascia_alta_contro_tutti, importanza, rendimenti_trigger,
                      valuta)
 from oos import NOTA_INCERTEZZA, FasceNonCalcolabili, indici_oos, piu_meno_bp, soglia_dal_test, valuta_oos
-from pesi import pesi_unicita
+from pesi import occorrenze_effettive, pesi_unicita
 from split import barra_confine, costruisci_X, split_train_test
 from target import costruisci_target
 
@@ -162,34 +167,42 @@ def riga_mostrati(conteggi: dict, n_mostra: int = 10) -> str:
     return f"mostrati {c['mostrati']} di {c['totale']} trigger ({motivi})"
 
 
-def _plot_con_costo(copia, nomi, costo_bp):
-    """Il grafico di V4, con la linea tratteggiata al costo di un trade (in %, come l'asse)."""
+def _plot_con_costo(copia, nomi, costo_bp, linea_H=None):
+    """
+    Il grafico di V4, con la linea tratteggiata al costo di un trade (in %, come l'asse) e, con
+    linea_H, una linea verticale all'H scelto (in barre dal trigger, come l'asse).
+    """
     import matplotlib.pyplot as plt
-    if costo_bp is None:
+    if costo_bp is None and linea_H is None:
         copia.plot(candidati=nomi, figsize=(13, 7.5))       # il grafico di V4: si mostra da se'
         return
     mostra = plt.show
-    plt.show = lambda *a, **k: None                          # V4 chiama plt.show: la linea va aggiunta prima
+    plt.show = lambda *a, **k: None                          # V4 chiama plt.show: le linee vanno aggiunte prima
     try:
         copia.plot(candidati=nomi, figsize=(13, 7.5))
     finally:
         plt.show = mostra
     ax = plt.gcf().axes[0]
-    ax.axhline(float(costo_bp) / 100, color=COLORE_COSTO, ls="--", lw=1.2,
-               label=f"costo di un trade ({float(costo_bp):.2f} bp: commissione andata e ritorno + spread)")
+    if costo_bp is not None:
+        ax.axhline(float(costo_bp) / 100, color=COLORE_COSTO, ls="--", lw=1.2,
+                   label=f"costo di un trade ({float(costo_bp):.2f} bp: commissione andata e ritorno + spread)")
+    if linea_H is not None:
+        ax.axvline(int(linea_H), color=COLORE_H, ls="-.", lw=1.2, label=f"H = {int(linea_H)} barre")
     ax.legend(fontsize=8, loc="best")
     plt.show()
 
 
 COLORE_COSTO = "#c0392b"
+COLORE_H = "#2c3e50"
 
 
-def grafico_event_study(ev, titolo: str = "", candidati=None, costo_bp=None):
+def grafico_event_study(ev, titolo: str = "", candidati=None, costo_bp=None, linea_H=None):
     """
     Le curve dell'event study con il grafico di V4 (EventStudy.plot), con le occorrenze nel
     train accanto al nome (nella legenda). candidati=None: TUTTI i trigger misurati; una lista:
     solo quei trigger (piu' la curva del mercato, che V4 disegna sempre). costo_bp: una linea
-    orizzontale tratteggiata al costo di un trade. Ritorna le etichette.
+    orizzontale tratteggiata al costo di un trade. linea_H: una linea verticale a H barre.
+    Ritorna le etichette.
     """
     import copy
     n = occorrenze_train(ev)
@@ -203,7 +216,7 @@ def grafico_event_study(ev, titolo: str = "", candidati=None, costo_bp=None):
         if titolo:
             print(titolo)
         if nomi:
-            _plot_con_costo(copia, nomi, costo_bp)
+            _plot_con_costo(copia, nomi, costo_bp, linea_H)
         else:
             print("nessuna curva da disegnare: nessun trigger da mostrare.")
         return nomi
@@ -212,10 +225,75 @@ def grafico_event_study(ev, titolo: str = "", candidati=None, costo_bp=None):
              if c not in ev.curve.columns or ev.curve[c].isna().all()]
     if titolo:
         print(titolo)
-    _plot_con_costo(copia, nomi, costo_bp)
+    _plot_con_costo(copia, nomi, costo_bp, linea_H)
     if senza:
         print(f"senza curva (nessuna occorrenza nel train): {', '.join(senza)}")
     return nomi + [f"{c} (0 nel train, senza curva)" for c in senza if c not in ev.curve.columns]
+
+
+PROPOSTA_AUTOMATICA = "proposta automatica"
+SCELTA_A_MANO = "scelta a mano"
+
+
+def tabella_proposta(proposta, timeframe: str) -> pd.DataFrame:
+    """Passo 4: una riga per H della griglia, con le ore accanto e l'H scelto segnato."""
+    tab = proposta.per_H.copy()
+    tab.insert(0, "ore", [ore(h, timeframe) for h in tab.index])
+    tab["scelto"] = ["◄ H scelto" if h == proposta.H else "" for h in tab.index]
+    return tab.round({"effettive": 1, "media_netta_bp": 2, "Totale_bp": 1})
+
+
+def grafico_gruppo(ev, proposta, costo_bp=None):
+    """Passo 4: le curve dell'event study dei soli trigger del gruppo, con una linea verticale a H."""
+    titolo = f"{proposta.nome} · curve dei trigger del gruppo proposto, train"
+    if proposta.H is None:
+        print(f"{titolo}\nnessun gruppo proposto: nessuna curva da disegnare.")
+        return []
+    ultima = int(ev.curve.index.max())
+    if proposta.H > ultima:
+        print(f"!!! H = {proposta.H} barre è oltre l'orizzonte dell'event study ({ultima} barre): "
+              "la linea verticale cade fuori dal grafico.")
+    candidati = [c for c in proposta.gruppo if c in ev.curve.columns]
+    return grafico_event_study(ev, titolo, candidati=candidati, costo_bp=costo_bp, linea_H=proposta.H)
+
+
+def scelta_lato(ds, proposta, trigger, H, direzione: int, collaudo: bool = False, macchina=None):
+    """
+    La cella 4 per un lato. Ritorna (trigger, H, origine):
+      - TRIGGER e H tutti e due None -> la proposta («proposta automatica»; gruppo vuoto: lato saltato);
+      - una lista e H scritti        -> «scelta a mano»;
+      - []                           -> lato saltato, qualunque sia H.
+    Si ferma se e' scritto solo uno dei due. Con una proposta, scrive la voce «gruppo» nel registro.
+    """
+    nome = NOMI_LATO[direzione]
+    if trigger is not None and len(trigger) == 0:
+        scelta, H_scelto, origine = [], None, SCELTA_A_MANO
+    elif (trigger is None) != (H is None):
+        raise ValueError(f"{nome}: scrivi trigger e H insieme, oppure lasciali tutti e due a None "
+                         f"(TRIGGER_{nome} e H_{nome} nella cella 4).")
+    elif trigger is None:
+        origine = PROPOSTA_AUTOMATICA
+        scelta, H_scelto = (list(proposta.gruppo), proposta.H) if proposta is not None else ([], None)
+    else:
+        scelta, H_scelto, origine = list(trigger), H, SCELTA_A_MANO
+    if proposta is None:
+        return scelta, H_scelto, origine
+    print(f"{nome}: {origine}")
+    if origine == PROPOSTA_AUTOMATICA and not scelta:
+        print(f"{nome}: nessun trigger ammesso: lato saltato")
+    import collegamento_v4
+    from engine.studio import nome_dataset
+    registro.aggiungi(ds.cartella, ds.symbol + "_" + ds.timeframe, {
+        "tipo": "gruppo", "collaudo": bool(collaudo), "v4": collegamento_v4.versione(), "ml": registro.versione_ml(),
+        "dataset": nome_dataset(ds.symbol, ds.timeframe), "lato": nome, "quota_train": proposta.quota,
+        "griglia": proposta.griglia, "min_nuove_per_meta": proposta.min_per_meta,
+        "ammessi": {h: list(a.index[a["ammesso"].astype(bool)]) for h, a in proposta.ammessi.items()},
+        "gruppi": {h: list(c.index[c["esito"] == ENTRA]) for h, c in proposta.composizione.items()},
+        "totali_bp": proposta.per_H["Totale_bp"].to_dict(), "effettive": proposta.per_H["effettive"].to_dict(),
+        "proposta": {"trigger": proposta.gruppo, "H": proposta.H},
+        "scelta": {"trigger": scelta, "H": H_scelto}, "origine": origine,
+    }, macchina=macchina)
+    return scelta, H_scelto, origine
 
 
 def controlla_scelta(ds, trigger, H, direzione: int, occorrenze=None) -> bool:
@@ -310,10 +388,11 @@ AVVISO_RISOLUZIONE = "!!! il test non può distinguere miglioramenti dell'ordine
 AVVISO_POTENZA = "la selezione vede solo feature forti (test di potenza: 5.000 trigger → AUC da sola ≥ 0,545)"
 
 
-def piu_meno_atteso(netto_bp_train, n_test: int, n_fasce: int = 5) -> float:
+def piu_meno_atteso(netto_bp_train, n_test: float, n_fasce: int = 5) -> float:
     """
     Il ± atteso della differenza «fascia alta − tutti» sul test, prima di guardarlo: s viene
-    SOLO dalle righe di train (il test entra solo con il numero dei suoi trigger).
+    SOLO dalle righe di train (il test entra solo con il numero dei suoi trigger, che al passo 5
+    sono le occorrenze effettive del test, docs/04 §5).
     """
     s = float(np.std(np.asarray(netto_bp_train, dtype=float), ddof=1))
     q = 1 / n_fasce
@@ -321,13 +400,18 @@ def piu_meno_atteso(netto_bp_train, n_test: int, n_fasce: int = 5) -> float:
     return float(2 * s * np.sqrt((1 - q) ** 2 * (1 / (n_test * q) + 1 / (n_test * (1 - q)))))
 
 
-def riga_risoluzione(n_train: int, n_test: int, piu_meno: float, costo_bp: float) -> str:
-    """La riga «risoluzione» del passo 5, con gli avvisi quando servono."""
-    riga = (f"risoluzione: {n_train} trigger nel train, {n_test} nel test · ± atteso di «fascia 5 − tutti» "
-            f"sul test: {piu_meno:.2f} bp (costo di un trade {float(costo_bp):.2f} bp)")
+def riga_risoluzione(n_train: int, n_test: int, eff_train: float, eff_test: float, piu_meno: float,
+                     costo_bp: float) -> str:
+    """
+    La riga «risoluzione» del passo 5, con gli avvisi quando servono. Il ± atteso e gli avvisi
+    usano le occorrenze effettive (docs/04 §5); le grezze si stampano accanto.
+    """
+    riga = (f"risoluzione: {n_train} trigger nel train (effettivi {eff_train:.1f}), {n_test} nel test "
+            f"(effettivi {eff_test:.1f}) · ± atteso di «fascia 5 − tutti» sul test, con gli effettivi: "
+            f"{piu_meno:.2f} bp (costo di un trade {float(costo_bp):.2f} bp)")
     if piu_meno > costo_bp:
         riga += f"\n{AVVISO_RISOLUZIONE}"
-    if n_train < TRIGGER_POTENZA:
+    if eff_train < TRIGGER_POTENZA:
         riga += f"\n{AVVISO_POTENZA}"
     return riga
 
@@ -353,8 +437,12 @@ def prepara_lato(ds, direzione: int, trigger, H: int, quota: float = 0.8, feat=N
     print(f"target: {len(target)} trigger · classe 1 {target['TARGET'].mean():.1%} · "
           f"bp netti medi {target['netto_bp'].mean():.2f}")
     idx_train, idx_test = split_train_test(target, ds.df_is, horizon=H, quota=quota)
-    pm = piu_meno_atteso(target.loc[idx_train, "netto_bp"], len(idx_test))
-    print(riga_risoluzione(len(idx_train), len(idx_test), pm, ds.costo_bp()["totale_bp"]))
+    # occorrenze effettive (docs/04 §5): pesi di unicita' non normalizzati, train e test ciascuno per se'
+    extra["pesi_grezzi_train"] = pesi_unicita(idx_train, ds.df, H, normalizza=False)
+    eff_train = float(extra["pesi_grezzi_train"].sum())
+    eff_test = occorrenze_effettive(idx_test, ds.df, H)
+    pm = piu_meno_atteso(target.loc[idx_train, "netto_bp"], eff_test)
+    print(riga_risoluzione(len(idx_train), len(idx_test), eff_train, eff_test, pm, ds.costo_bp()["totale_bp"]))
     X = costruisci_X(ds.df, target, list(trigger), ds.filtri)
     return Lato(direzione=direzione, trigger=list(trigger), H=int(H), target=target, idx_train=idx_train,
                 idx_test=idx_test, idx_oos=indici_oos(target, ds.df_is), X=X, quota=quota, extra=extra)
@@ -366,21 +454,46 @@ NOTA_TRIGGER_INSIEME = ("Un trigger che scatta insieme a un altro conta per entr
 
 def tabella_trigger_train(lato: Lato) -> pd.DataFrame:
     """
-    Passo 5: per ogni trigger scelto, SOLO sulle righe di train del target: occorrenze, bp lordi
-    medi, bp netti medi, % classe 1; piu' la riga «tutti». Un trigger che scatta insieme a un
-    altro conta per entrambi (NOTA_TRIGGER_INSIEME).
+    Passo 5: per ogni trigger scelto, SOLO sulle righe di train del target: occorrenze, effettivi
+    (somma dei pesi di unicita' non normalizzati del train, docs/04 §5), bp lordi medi, bp netti
+    medi, % classe 1; piu' la riga «tutti». Un trigger che scatta insieme a un altro conta per
+    entrambi (NOTA_TRIGGER_INSIEME).
     """
     t = lato.target.loc[lato.idx_train]
     X = lato.X.loc[lato.idx_train]
+    peso = lato.extra["pesi_grezzi_train"]
 
     def riga(r):
-        return {"occorrenze": len(r), "bp_lordi_medi": r["lordo_bp"].mean(), "bp_netti_medi": r["netto_bp"].mean(),
+        return {"occorrenze": len(r), "effettivi": float(peso.loc[r.index].sum()),
+                "bp_lordi_medi": r["lordo_bp"].mean(), "bp_netti_medi": r["netto_bp"].mean(),
                 "classe_1_%": 100 * r["TARGET"].mean()}
     righe = {trig: riga(t[X[trig].astype(bool)]) for trig in lato.trigger}
     righe["tutti"] = riga(t)
     tab = pd.DataFrame(righe).T
     tab.index.name = f"{lato.nome} · train"
     return tab.astype({"occorrenze": int})
+
+
+AVVISO_VERIFICA = ("!!! la media netta del gruppo sul test è sotto quella del train di più del ± della "
+                   "differenza: il gruppo rende sul test molto meno che sul train")
+
+
+def verifica_gruppo(lato: Lato) -> pd.DataFrame:
+    """
+    Passo 5, verifica onesta prima del modello: media netta dei trigger del lato sul train e sul
+    test, con il ± di ciascuno (oos.piu_meno_bp). Stampa AVVISO_VERIFICA se train − test supera
+    il ± della differenza, radice(±train² + ±test²).
+    """
+    righe = {}
+    for nome, idx in (("train", lato.idx_train), ("test", lato.idx_test)):
+        netto = lato.target.loc[idx, "netto_bp"]
+        righe[nome] = {"trigger": len(netto), "media_netta_bp": netto.mean(), "±bp": piu_meno_bp(netto)}
+    tab = pd.DataFrame(righe).T.astype({"trigger": int})
+    tab.index.name = f"{lato.nome} · verifica del gruppo"
+    differenza = tab.loc["train", "media_netta_bp"] - tab.loc["test", "media_netta_bp"]
+    if differenza > np.hypot(tab.loc["train", "±bp"], tab.loc["test", "±bp"]):
+        print(AVVISO_VERIFICA)
+    return tab.round({"media_netta_bp": 2, "±bp": 2})
 
 
 def seleziona_lato(ds, lato: Lato, con_unicita: bool = True, peso_rendimento: bool = True, seme: int = 0,

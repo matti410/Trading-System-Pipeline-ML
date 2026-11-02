@@ -27,6 +27,9 @@ COSA SI REGISTRA (lavoro B)
   tipo "selezione"      ogni feature selection (lavoro D): colonne tenute e tolte con il motivo,
                         sonde, K, tempo
   tipo "confronto"      il confronto sul test fra modello base e modello con la selezione (lavoro D)
+  tipo "gruppo"         la scelta del gruppo di un lato (docs/04): griglia, minimo per meta',
+                        ammessi, gruppi e Totali per H, proposta, scelta finale e origine
+                        («proposta automatica» o «scelta a mano»)
 Ogni voce porta data (UTC, dal sistema), macchina, commit di V4 e di questo
 repo, e collaudo = True/False (valori di collaudo, non scelte).
 """
@@ -37,7 +40,7 @@ from pathlib import Path
 import pandas as pd
 
 CARTELLA = "registro_ml"
-TIPI = ("addestramento", "oos", "selezione", "confronto")
+TIPI = ("addestramento", "oos", "selezione", "confronto", "gruppo")
 
 
 def cartella_registro(cartella_dati) -> Path:
@@ -132,4 +135,5 @@ def stampa_conto(cartella_dati, dataset: str) -> None:
           f"{c['addestramento']} modelli addestrati (di collaudo {c['addestramento_collaudo']}) · "
           f"selezioni {c['selezione']} (di collaudo {c['selezione_collaudo']}) · "
           f"confronti base/selezione {c['confronto']} (di collaudo {c['confronto_collaudo']}) · "
+          f"scelte del gruppo {c['gruppo']} (di collaudo {c['gruppo_collaudo']}) · "
           f"OOS guardato {c['oos']} volte (di collaudo {c['oos_collaudo']})")

@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import pipeline
+from pesi import occorrenze_effettive
 from split import barra_confine, split_train_test
 
 
@@ -254,9 +255,11 @@ def test_tabella_trigger_solo_train(ds_vero):
     lato = pipeline.prepara_lato(ds_vero, 1, trig, 16)
     tab = pipeline.tabella_trigger_train(lato)
     assert list(tab.index) == trig + ["tutti"]
-    assert list(tab.columns) == ["occorrenze", "bp_lordi_medi", "bp_netti_medi", "classe_1_%"]
+    assert list(tab.columns) == ["occorrenze", "effettivi", "bp_lordi_medi", "bp_netti_medi", "classe_1_%"]
     t = lato.target.loc[lato.idx_train]
     assert tab.loc["tutti", "occorrenze"] == len(lato.idx_train)
+    assert np.isclose(tab.loc["tutti", "effettivi"], occorrenze_effettive(lato.idx_train, ds_vero.df, 16))
+    assert tab.loc["tutti", "effettivi"] <= tab.loc["tutti", "occorrenze"]
     assert np.isclose(tab.loc["tutti", "bp_netti_medi"], t["netto_bp"].mean())
     uno = lato.X.loc[lato.idx_train, trig[0]].astype(bool)
     assert tab.loc[trig[0], "occorrenze"] == int(uno.sum())
@@ -314,19 +317,26 @@ def test_risoluzione_non_vede_il_test(ds_vero, capsys):
     """Il ± atteso viene solo dal train: cambiare i netto_bp del test (e dell'OOS) non lo cambia."""
     lato = pipeline.prepara_lato(ds_vero, 1, ds_vero.trigger_long[:2], 16)
     uscita = capsys.readouterr().out
-    pm = pipeline.piu_meno_atteso(lato.target.loc[lato.idx_train, "netto_bp"], len(lato.idx_test))
-    assert pipeline.riga_risoluzione(len(lato.idx_train), len(lato.idx_test), pm,
+    eff_train = occorrenze_effettive(lato.idx_train, ds_vero.df, lato.H)
+    eff_test = occorrenze_effettive(lato.idx_test, ds_vero.df, lato.H)
+    assert eff_test <= len(lato.idx_test)
+    pm = pipeline.piu_meno_atteso(lato.target.loc[lato.idx_train, "netto_bp"], eff_test)
+    assert pipeline.riga_risoluzione(len(lato.idx_train), len(lato.idx_test), eff_train, eff_test, pm,
                                      ds_vero.costo_bp()["totale_bp"]) in uscita
     target = lato.target.copy()
     target.loc[target.index.difference(lato.idx_train), "netto_bp"] = 9999.0
-    assert pipeline.piu_meno_atteso(target.loc[lato.idx_train, "netto_bp"], len(lato.idx_test)) == pm
+    assert pipeline.piu_meno_atteso(target.loc[lato.idx_train, "netto_bp"], eff_test) == pm
 
 
 def test_risoluzione_avvisi_solo_quando_servono():
     r = pipeline.riga_risoluzione
-    assert pipeline.AVVISO_RISOLUZIONE in r(6000, 1500, 12.0, 10.0)        # ± sopra il costo
-    assert pipeline.AVVISO_RISOLUZIONE not in r(6000, 1500, 9.0, 10.0)
-    assert pipeline.AVVISO_POTENZA in r(4999, 1500, 9.0, 10.0)             # meno di 5.000 nel train
-    assert pipeline.AVVISO_POTENZA not in r(5000, 1500, 9.0, 10.0)
-    assert r(5000, 1500, 9.0, 10.0).count("\n") == 0
+    assert pipeline.AVVISO_RISOLUZIONE in r(6000, 1500, 6000, 1500, 12.0, 10.0)      # ± sopra il costo
+    assert pipeline.AVVISO_RISOLUZIONE not in r(6000, 1500, 6000, 1500, 9.0, 10.0)
+    assert pipeline.AVVISO_POTENZA in r(4999, 1500, 4999, 1500, 9.0, 10.0)           # meno di 5.000 nel train
+    assert pipeline.AVVISO_POTENZA not in r(5000, 1500, 5000, 1500, 9.0, 10.0)
+    assert r(5000, 1500, 5000, 1500, 9.0, 10.0).count("\n") == 0
+    # gli avvisi guardano le effettive (docs/04 §5), le grezze si stampano accanto
+    assert pipeline.AVVISO_POTENZA in r(6000, 1500, 4999.5, 1500, 9.0, 10.0)
+    assert "6000 trigger nel train (effettivi 4999.5), 1500 nel test (effettivi 1400.2)" in \
+        r(6000, 1500, 4999.5, 1400.25, 9.0, 10.0)
     assert "test di potenza: 5.000 trigger → AUC da sola ≥ 0,545" in pipeline.AVVISO_POTENZA

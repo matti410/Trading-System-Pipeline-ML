@@ -4,7 +4,8 @@ interruttore dopo il modello di base).
 
 Modulo ADDITIVO: non modifica nessun file esistente.
 
-  pesi_unicita(indice, df_lato, horizon) -> Series di pesi, media 1
+  pesi_unicita(indice, df_lato, horizon, normalizza=True) -> Series di pesi, media 1
+  occorrenze_effettive(indice, df_lato, horizon) -> float (somma dei pesi non normalizzati)
 
 IDEA
 ----
@@ -27,7 +28,8 @@ import numpy as np
 import pandas as pd
 
 
-def pesi_unicita(indice, df_lato, horizon):
+def pesi_unicita(indice, df_lato, horizon, normalizza=True):
+    """normalizza=False: i pesi prima della media 1 (isolato 1, due finestre uguali 0,5 ciascuna)."""
     pos = df_lato.index.get_indexer(indice)
     n = len(df_lato)
     if (pos < 0).any() or (pos + horizon + 1 >= n).any():
@@ -44,8 +46,18 @@ def pesi_unicita(indice, df_lato, horizon):
     somma = np.concatenate([[0.0], np.cumsum(inverso)])
     peso = (somma[pos + horizon + 1] - somma[pos + 1]) / horizon
 
-    peso = peso / peso.mean()
+    if normalizza:
+        peso = peso / peso.mean()
     return pd.Series(peso, index=indice, name="peso")
+
+
+def occorrenze_effettive(indice, df_lato, horizon) -> float:
+    """
+    Le occorrenze effettive (docs/04 §5): la somma dei pesi di unicita' NON normalizzati, con la
+    stessa finestra di pesi_unicita. Trigger isolati: effettive = grezze; due trigger con la
+    stessa finestra contano come uno.
+    """
+    return float(pesi_unicita(indice, df_lato, horizon, normalizza=False).sum())
 
 
 def tetto_rendimento(netto_bp_fit, quantile=0.95) -> float:
