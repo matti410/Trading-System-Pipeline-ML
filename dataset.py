@@ -1,8 +1,9 @@
 """
 Il dataset di lavoro, preso dal Lab (V4) come la sua schermata 1 (30/10/2026, docs/02 §A).
 
-  apri(symbol, timeframe, cartella, aggiorna=False) -> Dataset
+  apri(symbol, timeframe, cartella, aggiorna=False, generati=False) -> Dataset
   trigger_candidati(direzione) / filtri() -> list[str]
+  trigger_generati(solo_long) -> (long, short, info)   i trigger generati di V4 (docs/83 di V4)
   storico_btc(ds) -> DataFrame | None   BTC dello stesso exchange, mercato e timeframe (lavoro C)
 
 DA DOVE VIENE OGNI COSA (tutto da V4, niente copie)
@@ -14,6 +15,8 @@ DA DOVE VIENE OGNI COSA (tutto da V4, niente copie)
   costi            vetrina.costi_storico(symbol, df, funding, df_prezzo=df_is)
   trigger, filtri  il registro di V4 (vetrina._registra_condizioni), colonne
                    calcolate come il backtest del Lab: get_entry(nome)(df).astype(bool)
+  trigger generati engine.generatore.catalogo (carica_catalogo, registra_trigger_generati,
+                   trigger_del_catalogo), solo con generati=True; colonne come sopra
 
 LO STUDIO DI V4 NON SI TOCCA
 ----------------------------
@@ -47,6 +50,9 @@ class Dataset:
     impronta: str = ""          # "ok" o "assente" (il dataset non e' ancora entrato nello studio)
     aggiornamento: object = None
     riscaldamento_v4: int = 0   # barre iniziali del CSV tolte dagli indicatori di V4 (lavoro C)
+    generati_long: list = field(default_factory=list)    # trigger generati (docs/83 di V4), anche in trigger_long
+    generati_short: list = field(default_factory=list)
+    catalogo_generati: dict | None = None                # versione, ricette e trigger del catalogo generato
 
     def costo_bp(self) -> dict:
         """Commissione andata e ritorno e spread di un passo al prezzo mediano dell'in-sample, in bp."""
@@ -71,7 +77,10 @@ class Dataset:
                                 f"{c['commissione_bp']:.1f} bp + spread di un passo {c['spread_bp']:.2f} bp"),
             ("Funding", "sì, contato trade per trade" if self.funding is not None else "no"),
             ("Lati", "solo LONG (spot)" if self.solo_long else "LONG e SHORT"),
-            ("Trigger", f"{len(self.trigger_long)} long · {len(self.trigger_short)} short"),
+            ("Trigger", f"{len(self.trigger_long)} long · {len(self.trigger_short)} short"
+                        + (f" (di cui generati {len(self.generati_long)} long · {len(self.generati_short)} short, "
+                           f"catalogo v{self.catalogo_generati['versione']} di V4: "
+                           f"{self.catalogo_generati['ricette']} ricette)" if self.catalogo_generati else "")),
             ("Filtri", f"{len(self.filtri)} (F* e VWAP_*)"),
             ("Impronta dell'in-sample", {"ok": "uguale a quella dello studio",
                                          "assente": "non ancora nello studio: aprilo una volta nel Lab"}
@@ -81,9 +90,28 @@ class Dataset:
 
 
 def trigger_candidati(direzione: int) -> list[str]:
-    """I trigger del Lab per un lato (V4: vetrina._trigger_candidati, privata)."""
-    from engine import vetrina
-    return list(vetrina._trigger_candidati(direzione))
+    """
+    I trigger del catalogo del Lab per un lato (V4: vetrina._trigger_candidati, privata), senza
+    i generati: vetrina elenca tutto il registro, e i generati restano registrati dopo un giro
+    con generati=True (si aggiungono a parte, con trigger_generati).
+    """
+    from engine import registry, vetrina
+    from engine.generatore import TriggerGenerato
+    return [n for n in vetrina._trigger_candidati(direzione) if not isinstance(registry.get_entry(n), TriggerGenerato)]
+
+
+def trigger_generati(solo_long: bool):
+    """
+    I trigger generati di V4 (docs/83 di V4, dati_catalogo/generati_v1.json), caricati e registrati
+    nel motore con le funzioni di V4 (engine.generatore.catalogo). Ritorna (nomi long, nomi short,
+    info del catalogo); gli short vuoti se il symbol e' solo long.
+    """
+    from engine.generatore.catalogo import carica_catalogo, registra_trigger_generati, trigger_del_catalogo
+    cat = carica_catalogo()
+    registra_trigger_generati(cat)
+    lunghi, corti = trigger_del_catalogo(cat)
+    info = {"versione": cat["versione"], "ricette": len(cat["ricette"]), "trigger": len(lunghi) + len(corti)}
+    return list(lunghi), [] if solo_long else list(corti), info
 
 
 def filtri() -> list[str]:
@@ -154,11 +182,13 @@ def _colonne_condizioni(df, nomi_entry, nomi_filtri):
 
 
 def apri(symbol: str, timeframe: str, cartella, aggiorna: bool = False, macchina: str | None = None,
-         condizioni: bool = True, verbose: bool = True) -> Dataset:
+         condizioni: bool = True, verbose: bool = True, generati: bool = False) -> Dataset:
     """
     Il dataset (symbol, timeframe) come lo prepara la schermata 1 del Lab, con il
     confine dello studio letto e mai scritto. condizioni=False salta il calcolo
-    delle colonne E*/F* (serve ai test sui soli costi).
+    delle colonne E*/F* (serve ai test sui soli costi). generati=True (TRIGGER_GENERATI
+    del notebook): anche i trigger generati di V4, in fondo a trigger_long e trigger_short,
+    con le loro colonne calcolate come le altre.
     """
     from engine import vetrina
     from engine.exchange import solo_long
@@ -182,6 +212,8 @@ def apri(symbol: str, timeframe: str, cartella, aggiorna: bool = False, macchina
     vetrina._registra_condizioni()
     t_long = trigger_candidati(1)
     t_short = [] if lungo_solo else trigger_candidati(-1)
+    g_long, g_short, info_generati = trigger_generati(lungo_solo) if generati else ([], [], None)
+    t_long, t_short = t_long + g_long, t_short + g_short
     f = filtri()
     if condizioni:
         df = _colonne_condizioni(df, t_long + t_short, f)
@@ -193,7 +225,8 @@ def apri(symbol: str, timeframe: str, cartella, aggiorna: bool = False, macchina
                    df_oos=df_oos, confine=confine, funding=d.funding, costi=costi,
                    pip=float(costi["pip_size"]), solo_long=lungo_solo, trigger_long=t_long,
                    trigger_short=t_short, filtri=f, impronta=impronta, aggiornamento=d.aggiornamento,
-                   riscaldamento_v4=riscaldamento_v4)
+                   riscaldamento_v4=riscaldamento_v4, generati_long=g_long, generati_short=g_short,
+                   catalogo_generati=info_generati)
 
 
 def storico_btc(ds):
