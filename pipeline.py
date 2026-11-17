@@ -7,6 +7,8 @@ Le funzioni delle celle del notebook, lavoro B (30/10/2026, docs/02 §B e §F).
   event_study_train(ds, direzione, H, quota=0.8, trigger=None) -> EventStudy
   sintesi_event_study(ev, timeframe) -> DataFrame
   tabella_proposta(proposta, timeframe) -> DataFrame
+  tabella_composizione(ds, proposta) -> DataFrame
+  event_study_con_gruppo(ds, ev, proposta, H, quota=0.8) -> EventStudy
   grafico_gruppo(ev, proposta, costo_bp=None) -> etichette
   scelta_lato(ds, proposta, trigger, H, direzione, collaudo=False) -> (trigger, H, origine)
   controlla_scelta(ds, trigger, H, direzione) -> bool
@@ -28,6 +30,9 @@ REGOLE
   train/test di split.barra_confine, lo stesso dello split. min_trades del Lab.
 - Trigger e H del lato: la proposta automatica di gruppo.py (docs/04, 01/11/2026) oppure la
   scelta a mano di Mattia nella cella 4 (scelta_lato); controlla_scelta li controlla e basta.
+- Trigger generati di V4 (TRIGGER_GENERATI, 17/11/2026): candidati del gruppo automatico come
+  gli altri. L'event study del passo 3 resta sui soli trigger del catalogo del Lab; nelle tabelle
+  con una riga per trigger, dei generati si vedono solo quelli del gruppo piu' un riepilogo.
 - Ogni addestramento e ogni sguardo all'OOS (tabella o backtest) finiscono nel
   registro (registro.py, D4). Dal lavoro D anche ogni selezione e ogni confronto
   base/selezione.
@@ -87,15 +92,27 @@ def barre_train(ds, quota: float = 0.8) -> pd.DataFrame:
 MIN_TRADES_EVENT_STUDY = 0
 
 
+def generati_del_lato(ds, direzione: int) -> list:
+    """I trigger generati del lato (vuoto con TRIGGER_GENERATI = False)."""
+    return list(getattr(ds, "generati_long" if direzione == 1 else "generati_short", None) or [])
+
+
+def catalogo_del_lato(ds, direzione: int) -> list:
+    """I trigger del catalogo del Lab del lato, senza i generati."""
+    generati = set(generati_del_lato(ds, direzione))
+    return [t for t in (ds.trigger_long if direzione == 1 else ds.trigger_short) if t not in generati]
+
+
 def event_study_train(ds, direzione: int, H: int, quota: float = 0.8, trigger=None):
     """
-    L'event study di V4 sulle sole barre del train, con TUTTI i trigger candidati del lato
+    L'event study di V4 sulle sole barre del train, con TUTTI i trigger del catalogo del lato
     (o quelli di `trigger`), senza minimo di occorrenze. Ritorna l'EventStudy di V4.
+    I trigger generati non entrano (troppi per una tabella): si provano nel gruppo automatico.
     """
     from engine.event_study import run_event_study
     if direzione == -1 and ds.solo_long:
         raise ValueError("Sullo spot lo short non esiste: niente event study SHORT.")
-    candidati = list(trigger) if trigger is not None else (ds.trigger_long if direzione == 1 else ds.trigger_short)
+    candidati = list(trigger) if trigger is not None else catalogo_del_lato(ds, direzione)
     ev = run_event_study(barre_train(ds, quota), entry_names=candidati, horizon=int(H),
                          min_trades=MIN_TRADES_EVENT_STUDY, pip=ds.pip, verbose=False)
     # i trigger che nel train non scattano mai non hanno curva: V4 non li mette nella sintesi.
@@ -165,6 +182,15 @@ def riga_mostrati(conteggi: dict, n_mostra: int = 10) -> str:
         return (f"nessun trigger mostrato: nessuno dei {c['totale']} trigger ha il picco > 0 ({motivi}). "
                 "La sintesi completa resta nella variabile della cella.")
     return f"mostrati {c['mostrati']} di {c['totale']} trigger ({motivi})"
+
+
+def riga_generati_event_study(ds, direzione: int) -> str:
+    """Passo 3, con i generati accesi: la riga che dice che qui non si misurano."""
+    n = len(generati_del_lato(ds, direzione))
+    if not n:
+        return ""
+    return (f"trigger generati {NOMI_LATO[direzione]}: {n:,}".replace(",", ".")
+            + ", non misurati qui: si provano tutti nel gruppo automatico (passo 4)")
 
 
 def _plot_con_costo(copia, nomi, costo_bp, linea_H=None):
@@ -243,6 +269,45 @@ def tabella_proposta(proposta, timeframe: str) -> pd.DataFrame:
     return tab.round({"effettive": 1, "media_netta_bp": 2, "Totale_bp": 1})
 
 
+RIGA_GENERATI = "GENERATI (riepilogo)"
+
+
+def trigger_provati(ds, direzione: int) -> dict:
+    """Quanti trigger riceve il gruppo automatico del lato: del catalogo del Lab e generati."""
+    return {"catalogo": len(catalogo_del_lato(ds, direzione)), "generati": len(generati_del_lato(ds, direzione))}
+
+
+def tabella_composizione(ds, proposta) -> pd.DataFrame:
+    """
+    Passo 4: la composizione del gruppo dell'H scelto. Senza trigger generati e' quella di
+    gruppo.py. Con i generati: i trigger del catalogo come sempre e, dei generati, solo quelli
+    entrati nel gruppo, piu' la riga RIGA_GENERATI (quanti provati, ammessi, nel gruppo).
+    """
+    comp = proposta.composizione[proposta.H]
+    generati = set(generati_del_lato(ds, proposta.direzione))
+    if not generati:
+        return comp
+    amm = proposta.ammessi[proposta.H]
+    n_ammessi = int(amm.loc[amm.index.isin(generati), "ammesso"].astype(bool).sum())
+    nel_gruppo = sum(t in generati for t in proposta.gruppo)
+    tieni = [t for t in comp.index if t not in generati or comp.loc[t, "esito"] == ENTRA]
+    riepilogo = pd.DataFrame({"esito": [f"provati {len(generati)} · ammessi {n_ammessi} · nel gruppo {nel_gruppo}"]},
+                             index=pd.Index([RIGA_GENERATI], name=comp.index.name))
+    return pd.concat([comp.loc[tieni], riepilogo])
+
+
+def event_study_con_gruppo(ds, ev, proposta, H: int, quota: float = 0.8):
+    """
+    Passo 4: l'event study del passo 3 se contiene gia' tutti i trigger del gruppo; altrimenti
+    (generati nel gruppo) lo stesso event study con in piu' i trigger del gruppo che mancano.
+    """
+    richiesti = list(getattr(ev, "candidati_richiesti", []))
+    mancano = [t for t in proposta.gruppo if t not in richiesti]
+    if not mancano:
+        return ev
+    return event_study_train(ds, proposta.direzione, H, quota=quota, trigger=richiesti + mancano)
+
+
 def grafico_gruppo(ev, proposta, costo_bp=None):
     """Passo 4: le curve dell'event study dei soli trigger del gruppo, con una linea verticale a H."""
     titolo = f"{proposta.nome} · curve dei trigger del gruppo proposto, train"
@@ -287,6 +352,7 @@ def scelta_lato(ds, proposta, trigger, H, direzione: int, collaudo: bool = False
         "tipo": "gruppo", "collaudo": bool(collaudo), "v4": collegamento_v4.versione(), "ml": registro.versione_ml(),
         "dataset": nome_dataset(ds.symbol, ds.timeframe), "lato": nome, "quota_train": proposta.quota,
         "griglia": proposta.griglia, "min_nuove_per_meta": proposta.min_per_meta,
+        "trigger_provati": trigger_provati(ds, direzione), "catalogo_generati": getattr(ds, "catalogo_generati", None),
         "ammessi": {h: list(a.index[a["ammesso"].astype(bool)]) for h, a in proposta.ammessi.items()},
         "gruppi": {h: list(c.index[c["esito"] == ENTRA]) for h, c in proposta.composizione.items()},
         "totali_bp": proposta.per_H["Totale_bp"].to_dict(), "effettive": proposta.per_H["effettive"].to_dict(),

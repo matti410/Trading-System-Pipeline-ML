@@ -29,7 +29,8 @@ COSA SI REGISTRA (lavoro B)
   tipo "confronto"      il confronto sul test fra modello base e modello con la selezione (lavoro D)
   tipo "gruppo"         la scelta del gruppo di un lato (docs/04): griglia, minimo per meta',
                         ammessi, gruppi e Totali per H, proposta, scelta finale e origine
-                        («proposta automatica» o «scelta a mano»)
+                        («proposta automatica» o «scelta a mano»); i trigger provati (del
+                        catalogo e generati) e il catalogo generato di V4 usato (TRIGGER_GENERATI)
 Ogni voce porta data (UTC, dal sistema), macchina, commit di V4 e di questo
 repo, e collaudo = True/False (valori di collaudo, non scelte).
 """
